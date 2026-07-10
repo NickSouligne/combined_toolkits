@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.discriminant_analysis import StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
@@ -493,7 +493,7 @@ def evaluate_intersectional_fairness(
     pre_dense = ColumnTransformer([
         ("num", num_pipe_dense, numeric_cols),
         ("cat", cat_pipe_dense, categorical_cols),
-    ], remainder="drop", sparse_threshold=1.1)
+    ], remainder="drop", sparse_threshold=1.0)
 
     #Get the model type and parameters
     clf = _get_model(model_type, model_params)
