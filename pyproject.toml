@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "combined-toolkits"
+version = "0.1.0"
+description = "FairLogue and FairSelect toolkits for intersectional fairness analysis and mitigation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Nick Souligne" }
+]
+keywords = [
+    "algorithmic fairness",
+    "intersectional fairness",
+    "machine learning",
+    "healthcare",
+    "bias mitigation"
+]
+
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "matplotlib>=3.7"
+]
+
+
+[project.optional-dependencies]
+fairselect = [
+    "imbalanced-learn>=0.11",
+    "fairlearn>=0.10"
+]
+
+boosting = [
+    "xgboost>=2.0",
+    "lightgbm>=4.0"
+]
+
+dev = [
+    "build>=1.2",
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "twine>=5.0"
+]
+
+all = [
+    "imbalanced-learn>=0.11",
+    "fairlearn>=0.10",
+    "xgboost>=2.0",
+    "lightgbm>=4.0"
+]
+
+
+[project.urls]
+Homepage = "https://github.com/NickSouligne/combined_toolkits"
+Repository = "https://github.com/NickSouligne/combined_toolkits"
+Issues = "https://github.com/NickSouligne/combined_toolkits/issues"
+
+
+[tool.setuptools]
+py-modules = ["FairModel"]
+include-package-data = true
+
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["FairLogue*", "FairSelect*"]
+exclude = [
+    "tests*",
+    "generated_glaucoma_stress_tests*",
+    "__pycache__*"
+]
