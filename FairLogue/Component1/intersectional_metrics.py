@@ -9,9 +9,19 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import FunctionTransformer, Pipeline
-from containers import FairnessResults, GroupRates
-from plots import _plot_bar, _plot_bar_series_by_group, _plot_grouped_eods_components, _plot_fairness_matrix
-from utilities import _compute_group_rates, _make_ohe, _get_model, _as_prob
+from .containers import FairnessResults, GroupRates
+from .plots import (
+    _plot_bar,
+    _plot_bar_series_by_group,
+    _plot_grouped_eods_components,
+    _plot_fairness_matrix,
+)
+from .utilities import (
+    _compute_group_rates,
+    _make_ohe,
+    _get_model,
+    _as_prob,
+)
 from sklearn.model_selection import StratifiedKFold
 
 
