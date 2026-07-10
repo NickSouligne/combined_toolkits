@@ -4,7 +4,7 @@ import sys
 import pandas as pd
 from matplotlib import pyplot as plt
 
-from intersectional_metrics import cross_validate_intersectional_fairness, evaluate_intersectional_fairness
+from .intersectional_metrics import cross_validate_intersectional_fairness, evaluate_intersectional_fairness
 
 
 # ---------------------------------------------------------------------
