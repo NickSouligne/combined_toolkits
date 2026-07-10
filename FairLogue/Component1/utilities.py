@@ -8,7 +8,7 @@ from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neural_network import MLPClassifier
-from containers import GroupRates
+from .containers import GroupRates
 
 
 #Helper function to create OneHotEncoder with sparse or dense output

@@ -4,14 +4,24 @@ from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.discriminant_analysis import StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import FunctionTransformer, Pipeline
-from containers import FairnessResults, GroupRates
-from plots import _plot_bar, _plot_bar_series_by_group, _plot_grouped_eods_components, _plot_fairness_matrix
-from utilities import _compute_group_rates, _make_ohe, _get_model, _as_prob
+from .containers import FairnessResults, GroupRates
+from .plots import (
+    _plot_bar,
+    _plot_bar_series_by_group,
+    _plot_grouped_eods_components,
+    _plot_fairness_matrix,
+)
+from .utilities import (
+    _compute_group_rates,
+    _make_ohe,
+    _get_model,
+    _as_prob,
+)
 from sklearn.model_selection import StratifiedKFold
 
 
@@ -483,7 +493,7 @@ def evaluate_intersectional_fairness(
     pre_dense = ColumnTransformer([
         ("num", num_pipe_dense, numeric_cols),
         ("cat", cat_pipe_dense, categorical_cols),
-    ], remainder="drop", sparse_threshold=1.1)
+    ], remainder="drop", sparse_threshold=1.0)
 
     #Get the model type and parameters
     clf = _get_model(model_type, model_params)
