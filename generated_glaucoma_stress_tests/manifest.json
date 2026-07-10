@@ -1,0 +1,831 @@
+[
+  {
+    "name": "baseline",
+    "seed": 20260324,
+    "path": "generated_glaucoma_stress_tests\\baseline.csv",
+    "purpose": "Reference dataset with realistic structure and mild subgroup differences.",
+    "notes": "Use as the control dataset for baseline and combined comparisons.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.31566666666666665,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.2967032967032967,
+          "n": 546
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.3028571428571429,
+          "n": 700
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.3507853403141361,
+          "n": 955
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.3541374474053296,
+          "n": 1426
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3119346367084914,
+          "n": 3427
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.3042862919530934,
+          "n": 4946
+        }
+      ]
+    },
+    "params": {}
+  },
+  {
+    "name": "pre_reweight_y_a",
+    "seed": 20261324,
+    "path": "generated_glaucoma_stress_tests\\pre_reweight_y_a.csv",
+    "purpose": "Strong y-a dependence to test Kamiran-Calders style reweighting.",
+    "notes": "Inject direct group effect on outcome while keeping features broadly similar.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.3224166666666667,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.25626204238921,
+          "n": 519
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.29457364341085274,
+          "n": 645
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.3712035995500562,
+          "n": 889
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.4578729281767956,
+          "n": 1448
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.2997438087105038,
+          "n": 3513
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.3008423586040915,
+          "n": 4986
+        }
+      ]
+    },
+    "params": {
+      "direct_group_effects": {
+        "('Black', 'Male')": 0.55,
+        "('Black', 'Female')": 0.35,
+        "('Asian', 'Female')": -0.25,
+        "('White', 'Male')": -0.1
+      }
+    }
+  },
+  {
+    "name": "pre_smote_rare_positive",
+    "seed": 20262324,
+    "path": "generated_glaucoma_stress_tests\\pre_smote_rare_positive.csv",
+    "purpose": "Rare-event + minority-group scarcity to test SMOTE or oversampling.",
+    "notes": "Lower prevalence globally and make one group rare so synthetic minority creation is useful.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.051,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.0196078431372549,
+          "n": 102
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.05639097744360902,
+          "n": 266
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.0668229777256741,
+          "n": 853
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.06975269499048826,
+          "n": 1577
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.046474358974358976,
+          "n": 3744
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.04653719311102968,
+          "n": 5458
+        }
+      ]
+    },
+    "params": {
+      "group_imbalance": {
+        "('Asian', 'Female')": 0.22,
+        "('Asian', 'Male')": 0.35,
+        "('Black', 'Female')": 0.85
+      },
+      "calibration_distortion_by_group": {
+        "('Asian', 'Female')": {
+          "intercept": -3.0,
+          "slope": 0.85
+        },
+        "('Asian', 'Male')": {
+          "intercept": -2.8,
+          "slope": 0.85
+        },
+        "('White', 'Male')": {
+          "intercept": -2.5,
+          "slope": 0.85
+        },
+        "('White', 'Female')": {
+          "intercept": -2.5,
+          "slope": 0.85
+        },
+        "('Black', 'Male')": {
+          "intercept": -2.3,
+          "slope": 0.85
+        },
+        "('Black', 'Female')": {
+          "intercept": -2.3,
+          "slope": 0.85
+        }
+      }
+    }
+  },
+  {
+    "name": "pre_local_massaging_label_bias",
+    "seed": 20263324,
+    "path": "generated_glaucoma_stress_tests\\pre_local_massaging_label_bias.csv",
+    "purpose": "Boundary-adjacent label bias to test local massaging.",
+    "notes": "Adds label flips concentrated in two groups; massaging should benefit because ambiguous labels sit near the decision boundary.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.34758333333333336,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.3142292490118577,
+          "n": 506
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.3118440779610195,
+          "n": 667
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.2980561555075594,
+          "n": 926
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.3321629213483146,
+          "n": 1424
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.32075471698113206,
+          "n": 3498
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.38823056838722636,
+          "n": 4979
+        }
+      ]
+    },
+    "params": {
+      "direct_group_effects": {
+        "('Black', 'Female')": -0.55,
+        "('White', 'Male')": 0.3
+      },
+      "label_flip_by_group": {
+        "('Black', 'Female')": 0.12,
+        "('White', 'Male')": 0.08
+      }
+    }
+  },
+  {
+    "name": "in_compositional_group_specific",
+    "seed": 20264324,
+    "path": "generated_glaucoma_stress_tests\\in_compositional_group_specific.csv",
+    "purpose": "Different feature-outcome relationships by group to test per-group compositional models.",
+    "notes": "The best classifier differs by group, so pooled models should underperform relative to group-specific models.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.35375,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.3630705394190871,
+          "n": 482
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.2884902840059791,
+          "n": 669
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.4559915164369035,
+          "n": 943
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.4289855072463768,
+          "n": 1380
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3165322580645161,
+          "n": 3472
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.34744756628413137,
+          "n": 5054
+        }
+      ]
+    },
+    "params": {
+      "heterogeneity_by_group": {
+        "('Black', 'Male')": {
+          "risk_score_coef": 1.2,
+          "oph_med_coef": 0.4
+        },
+        "('Black', 'Female')": {
+          "risk_score_coef": 0.8,
+          "days_contact_coef": 0.05
+        },
+        "('Asian', 'Female')": {
+          "risk_score_coef": -0.45,
+          "oph_med_coef": 0.55
+        },
+        "('White', 'Male')": {
+          "days_contact_coef": 0.03
+        }
+      }
+    }
+  },
+  {
+    "name": "in_group_balanced_ensemble",
+    "seed": 20265324,
+    "path": "generated_glaucoma_stress_tests\\in_group_balanced_ensemble.csv",
+    "purpose": "Severe subgroup imbalance to test group-balanced bootstrap ensembling.",
+    "notes": "One subgroup is very small but clinically distinct; balanced bootstraps should stabilize it.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.32475,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.42105263157894735,
+          "n": 57
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.3274336283185841,
+          "n": 113
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.3559322033898305,
+          "n": 1003
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.3248,
+          "n": 1250
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3311013622719926,
+          "n": 4331
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.3124285169653069,
+          "n": 5246
+        }
+      ]
+    },
+    "params": {
+      "group_imbalance": {
+        "('Asian', 'Female')": 0.12,
+        "('Asian', 'Male')": 0.18,
+        "('Black', 'Male')": 0.8,
+        "('White', 'Female')": 1.15
+      },
+      "direct_group_effects": {
+        "('Asian', 'Female')": 0.45,
+        "('Asian', 'Male')": 0.25
+      }
+    }
+  },
+  {
+    "name": "in_multicalibration_group_miscalibration",
+    "seed": 20266324,
+    "path": "generated_glaucoma_stress_tests\\in_multicalibration_group_miscalibration.csv",
+    "purpose": "Group-specific calibration slope/intercept errors to test multicalibration or isotonic correction.",
+    "notes": "Ranking remains informative, but probability calibration differs by subgroup.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.32975,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.405189620758483,
+          "n": 501
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.30712166172106825,
+          "n": 674
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.3007518796992481,
+          "n": 931
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.2604166666666667,
+          "n": 1440
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3239839725243274,
+          "n": 3494
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.3548387096774194,
+          "n": 4960
+        }
+      ]
+    },
+    "params": {
+      "calibration_distortion_by_group": {
+        "('Black', 'Male')": {
+          "intercept": -0.25,
+          "slope": 1.7
+        },
+        "('Black', 'Female')": {
+          "intercept": -0.15,
+          "slope": 1.45
+        },
+        "('Asian', 'Female')": {
+          "intercept": 0.2,
+          "slope": 0.72
+        },
+        "('White', 'Male')": {
+          "intercept": 0.08,
+          "slope": 0.82
+        }
+      }
+    }
+  },
+  {
+    "name": "in_reductions_equalized_odds",
+    "seed": 20267324,
+    "path": "generated_glaucoma_stress_tests\\in_reductions_equalized_odds.csv",
+    "purpose": "Error-rate asymmetry to test Equalized Odds reductions.",
+    "notes": "Adds subgroup-specific noise and direct effects so TPR/FPR disparities are large under a common threshold.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.32808333333333334,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.23581560283687944,
+          "n": 564
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.3025335320417288,
+          "n": 671
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.37543053960964407,
+          "n": 871
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.43373493975903615,
+          "n": 1411
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.30353549870652485,
+          "n": 3479
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.3209432454036771,
+          "n": 5004
+        }
+      ]
+    },
+    "params": {
+      "feature_shift": {
+        "('Black', 'Male')": {
+          "mean_sbp": 8.0,
+          "min_dbp": 4.0
+        },
+        "('Asian', 'Female')": {
+          "mean_sbp": -6.0,
+          "min_dbp": -3.5
+        }
+      },
+      "noise_scale_by_group": {
+        "('Black', 'Male')": 1.65,
+        "('Black', 'Female')": 1.35,
+        "('Asian', 'Female')": 1.55
+      },
+      "direct_group_effects": {
+        "('Black', 'Male')": 0.35,
+        "('Asian', 'Female')": -0.25
+      }
+    }
+  },
+  {
+    "name": "in_prejudice_remover_sensitive_attribute",
+    "seed": 20268324,
+    "path": "generated_glaucoma_stress_tests\\in_prejudice_remover_sensitive_attribute.csv",
+    "purpose": "Direct sensitive-attribute dependence in the label to test prejudice-remover style regularization.",
+    "notes": "Outcome depends on group beyond clinical features; regularization should suppress that direct dependence.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.34325,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.2147887323943662,
+          "n": 568
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.33136966126656847,
+          "n": 679
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.4537346711259755,
+          "n": 897
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.4958791208791209,
+          "n": 1456
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.31237203860778007,
+          "n": 3419
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.31620156595061233,
+          "n": 4981
+        }
+      ]
+    },
+    "params": {
+      "direct_group_effects": {
+        "('Black', 'Male')": 0.7,
+        "('Black', 'Female')": 0.45,
+        "('Asian', 'Female')": -0.4,
+        "('Asian', 'Male')": -0.25
+      }
+    }
+  },
+  {
+    "name": "post_youden_threshold_heterogeneity",
+    "seed": 20269324,
+    "path": "generated_glaucoma_stress_tests\\post_youden_threshold_heterogeneity.csv",
+    "purpose": "Different optimal decision thresholds by subgroup to test per-group Youden thresholds.",
+    "notes": "Probability ranking is useful, but the operating threshold differs by group because prevalence and score spread differ.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.30566666666666664,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.21052631578947367,
+          "n": 532
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.2995169082125604,
+          "n": 621
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.378803777544596,
+          "n": 953
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.4489795918367347,
+          "n": 1470
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3028189479802383,
+          "n": 3441
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.2622917920931166,
+          "n": 4983
+        }
+      ]
+    },
+    "params": {
+      "threshold_shift_by_group": {
+        "('Black', 'Male')": 0.1,
+        "('Black', 'Female')": 0.05,
+        "('Asian', 'Female')": -0.08,
+        "('White', 'Male')": -0.04
+      }
+    }
+  },
+  {
+    "name": "post_multiaccuracy_residual_structure",
+    "seed": 20270324,
+    "path": "generated_glaucoma_stress_tests\\post_multiaccuracy_residual_structure.csv",
+    "purpose": "Residual pattern within X0/X1 partitions to test multiaccuracy boosting.",
+    "notes": "Adds structured underprediction and overprediction tied to risk_score and group so an auditor can find residual correlation.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.326,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.3504950495049505,
+          "n": 505
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.2798165137614679,
+          "n": 654
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.33167330677290835,
+          "n": 1004
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.40915697674418605,
+          "n": 1376
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3139299160150594,
+          "n": 3453
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.31389776357827476,
+          "n": 5008
+        }
+      ]
+    },
+    "params": {
+      "heterogeneity_by_group": {
+        "('Black', 'Male')": {
+          "risk_score_coef": 0.9,
+          "days_contact_coef": 0.04
+        },
+        "('Asian', 'Female')": {
+          "risk_score_coef": -0.7,
+          "oph_med_coef": 0.35
+        }
+      },
+      "calibration_distortion_by_group": {
+        "('Black', 'Male')": {
+          "intercept": -0.1,
+          "slope": 1.35
+        },
+        "('Asian', 'Female')": {
+          "intercept": 0.12,
+          "slope": 0.75
+        }
+      }
+    }
+  },
+  {
+    "name": "post_reject_option_around_boundary",
+    "seed": 20271324,
+    "path": "generated_glaucoma_stress_tests\\post_reject_option_around_boundary.csv",
+    "purpose": "Group harm concentrated near the 0.5 decision boundary to test reject-option shift.",
+    "notes": "Creates many uncertain cases around the threshold in one group; boundary shifts should have visible effect.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.32616666666666666,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.297244094488189,
+          "n": 508
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.25036390101892286,
+          "n": 687
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.3602150537634409,
+          "n": 930
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.2595529920692141,
+          "n": 1387
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.37849280270956814,
+          "n": 3543
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.31445904954499493,
+          "n": 4945
+        }
+      ]
+    },
+    "params": {
+      "calibration_distortion_by_group": {
+        "('Black', 'Male')": {
+          "intercept": -0.05,
+          "slope": 1.05
+        },
+        "('White', 'Female')": {
+          "intercept": 0.02,
+          "slope": 0.98
+        }
+      },
+      "threshold_shift_by_group": {
+        "('Black', 'Male')": -0.06,
+        "('White', 'Female')": 0.04
+      }
+    }
+  },
+  {
+    "name": "post_input_repair_measurement_shift",
+    "seed": 20272324,
+    "path": "generated_glaucoma_stress_tests\\post_input_repair_measurement_shift.csv",
+    "purpose": "Group-specific feature measurement shift to test input repair / z-alignment.",
+    "notes": "Outcome process is shared, but measured vitals are shifted by group, so repairing the inputs should help.",
+    "summary": {
+      "n_rows": 12000,
+      "outcome_rate": 0.31283333333333335,
+      "group_summary": [
+        {
+          "Race": "Asian",
+          "Gender": "Female",
+          "outcome_rate": 0.23540489642184556,
+          "n": 531
+        },
+        {
+          "Race": "Asian",
+          "Gender": "Male",
+          "outcome_rate": 0.30275229357798167,
+          "n": 654
+        },
+        {
+          "Race": "Black",
+          "Gender": "Female",
+          "outcome_rate": 0.33975084937712347,
+          "n": 883
+        },
+        {
+          "Race": "Black",
+          "Gender": "Male",
+          "outcome_rate": 0.35550628233555065,
+          "n": 1353
+        },
+        {
+          "Race": "White",
+          "Gender": "Female",
+          "outcome_rate": 0.3116661935850128,
+          "n": 3523
+        },
+        {
+          "Race": "White",
+          "Gender": "Male",
+          "outcome_rate": 0.3069620253164557,
+          "n": 5056
+        }
+      ]
+    },
+    "params": {
+      "feature_shift": {
+        "('Black', 'Male')": {
+          "min_sbp": 12.0,
+          "mean_sbp": 14.0,
+          "min_dbp": 5.5
+        },
+        "('Asian', 'Female')": {
+          "min_sbp": -8.0,
+          "mean_sbp": -10.0,
+          "min_dbp": -4.0
+        }
+      }
+    }
+  }
+]
