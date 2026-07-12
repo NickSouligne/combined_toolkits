@@ -181,6 +181,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
 
         #6 panel histogram
         if table_null_delta is not None and table_uval is not None:
+            
             stats_grid = [
                 # Row 1
                 ("avg_neg", "Average (negative)"),
@@ -194,6 +195,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                 ("var_neg", "Variational (negative)"),
                 ("var_pos", "Variational (positive)"),
             ]
+            print(stats_grid)
 
             fig, axes = plt.subplots(3, 2, figsize=(15, 18))
 
@@ -222,14 +224,27 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                     ax.set_xlim([xmin, xmax])
 
                     # vertical red bar at 0, labeled with the u-value
-                    uval = float(table_uval[stat].values[0])
-                    annotate_plot(ax, uval, x_pos=0.0)
+                    uval = float(table_uval.at[0, stat])
+
+                    annotate_plot(
+                        ax,
+                        uval,
+                        x_pos=delta_uval,
+                    )
 
                 ax.set_title(title, fontsize=14)
                 ax.set_xlabel("Obs. − Null")
                 ax.set_ylabel("Density")
 
-            plt.tight_layout()
+            fig.subplots_adjust(
+                left=0.10,
+                right=0.97,
+                bottom=0.07,
+                top=0.96,
+                wspace=0.25,   # horizontal space between columns
+                hspace=0.45,   # vertical space between rows
+            )
+
             plt.show()
 
             neg_stats = [("avg_neg", "Average"), ("max_neg", "Maximum"), ("var_neg", "Variational")]
