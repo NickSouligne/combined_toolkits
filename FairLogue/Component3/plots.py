@@ -182,11 +182,16 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
         #6 panel histogram
         if table_null_delta is not None and table_uval is not None:
             stats_grid = [
+                # Row 1
                 ("avg_neg", "Average (negative)"),
-                ("max_neg", "Maximum (negative)"),
-                ("var_neg", "Variational (negative)"),
                 ("avg_pos", "Average (positive)"),
+
+                # Row 2
+                ("max_neg", "Maximum (negative)"),
                 ("max_pos", "Maximum (positive)"),
+
+                # Row 3
+                ("var_neg", "Variational (negative)"),
                 ("var_pos", "Variational (positive)"),
             ]
 
