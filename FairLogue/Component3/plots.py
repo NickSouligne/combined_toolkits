@@ -242,7 +242,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                     )
 
                 ax.set_title(title, fontsize=14)
-                ax.set_xlabel("Obs. − Null")
+                ax.set_xlabel("Observed − Counterfactual")
                 ax.set_ylabel("Density")
 
             fig.subplots_adjust(
@@ -267,7 +267,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
             ]:
                 #ax.axvline(uval, linestyle=":", linewidth=1)
                 ax.set_title(f"ECDF of Observed vs Counterfactual Disparities ({panel_title})")
-                ax.set_xlabel("Obs. − Null")
+                ax.set_xlabel("Observed − Counterfactual")
                 ax.set_ylim(0, 1)
 
                 for stat, label in stats:
