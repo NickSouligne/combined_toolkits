@@ -219,9 +219,11 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                     lo = np.percentile(vals, 1.0)
                     hi = np.percentile(vals, 99.0)
 
+                    uval = float(table_uval.at[0, stat])
+
                     # Ensure both zero and the u-value threshold are visible
-                    xmin = min(lo, 0.0, delta_uval)
-                    xmax = max(hi, 0.0, delta_uval)
+                    xmin = min(lo, 0.0, uval)
+                    xmax = max(hi, 0.0, uval)
 
                     if np.isclose(xmin, xmax):
                         padding = max(abs(xmin) * 0.05, 0.01)
@@ -230,7 +232,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
 
                     ax.set_xlim(xmin, xmax)
 
-                    uval = float(table_uval.at[0, stat])
+                    
 
                     # The line marks the disparity threshold used to calculate u
                     annotate_plot(
