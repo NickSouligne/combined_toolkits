@@ -238,7 +238,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                     annotate_plot(
                         ax,
                         uval,
-                        x_pos=uval,
+                        x_pos=delta_uval,
                     )
 
                 ax.set_title(title, fontsize=14)
