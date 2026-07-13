@@ -10,23 +10,24 @@ import seaborn as sns
 
 #---- Plotting helpers -----
 
-def annotate_plot(ax: plt.Axes, u_value: float, x_pos: float = 0.0) -> None:
-    """
-    Mark a vertical u-value reference on an axis.
+def annotate_plot(ax, uval, x_pos):
+    ax.axvline(
+        x=x_pos,
+        color="red",
+        linestyle="--",
+        linewidth=2,
+    )
 
-    Draws a dashed vline at `value` and labels it “u-value = …”.
-    See docs/plots.md#annotate_plot
-    """
-    ax.axvline(x_pos, linestyle="--", color="red")
-    ymax = ax.get_ylim()[1]
     ax.annotate(
-        f"u-value = {u_value:.3f}",
-        xy=(x_pos, ymax * 0.8),
-        xytext=(x_pos, ymax * 0.8),
-        ha="right",
-        va="center",
-        bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="black", lw=0.5),
-        arrowprops=dict(arrowstyle="->", lw=0.5),
+        f"u = {uval:.3f}",
+        xy=(x_pos, 0.95),
+        xycoords=("data", "axes fraction"),
+        xytext=(6, 0),
+        textcoords="offset points",
+        ha="left",
+        va="top",
+        color="red",
+        fontsize=11,
     )
 
 
@@ -207,7 +208,6 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                 )
 
                 if vals.size > 0:
-                    # KDE without clipping; full distribution
                     sns.kdeplot(
                         vals,
                         ax=ax,
@@ -216,16 +216,23 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                         color="steelblue",
                     )
 
-                    # Choose data-driven limits, then expand to include 0
                     lo = np.percentile(vals, 1.0)
                     hi = np.percentile(vals, 99.0)
-                    xmin = min(lo, 0.0)
-                    xmax = max(hi, 0.0)
-                    ax.set_xlim([xmin, xmax])
 
-                    # vertical red bar at 0, labeled with the u-value
+                    # Ensure both zero and the u-value threshold are visible
+                    xmin = min(lo, 0.0, delta_uval)
+                    xmax = max(hi, 0.0, delta_uval)
+
+                    if np.isclose(xmin, xmax):
+                        padding = max(abs(xmin) * 0.05, 0.01)
+                        xmin -= padding
+                        xmax += padding
+
+                    ax.set_xlim(xmin, xmax)
+
                     uval = float(table_uval.at[0, stat])
 
+                    # The line marks the disparity threshold used to calculate u
                     annotate_plot(
                         ax,
                         uval,
