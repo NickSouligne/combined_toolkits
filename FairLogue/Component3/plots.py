@@ -236,7 +236,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                     annotate_plot(
                         ax,
                         uval,
-                        x_pos=delta_uval,
+                        x_pos=uval,
                     )
 
                 ax.set_title(title, fontsize=14)
@@ -263,7 +263,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                 (axes[0], neg_stats, "Negative"),
                 (axes[1], pos_stats, "Positive"),
             ]:
-                ax.axvline(delta_uval, linestyle=":", linewidth=1)
+                #ax.axvline(uval, linestyle=":", linewidth=1)
                 ax.set_title(f"ECDF of Observed vs Counterfactual Disparities ({panel_title})")
                 ax.set_xlabel("Obs. − Null")
                 ax.set_ylim(0, 1)
