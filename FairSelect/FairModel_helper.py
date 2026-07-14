@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from .FairModel import FairModel
+from FairModel import FairModel
 from .utils import input_repair_standardize_by_group, to_proba, apply_multiaccuracy_boost
 
 def make_standard_fair_model(
