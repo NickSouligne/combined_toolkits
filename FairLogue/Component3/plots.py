@@ -11,25 +11,41 @@ import seaborn as sns
 #---- Plotting helpers -----
 
 def annotate_plot(ax, uval, x_pos):
-    ax.axvline(
+    """
+    Draw the dashed threshold line and a boxed u-value label.
+    """
+    x_pos = float(x_pos)
+
+    line = ax.axvline(
         x=x_pos,
         color="red",
         linestyle="--",
-        linewidth=2,
+        linewidth=2.0,
+        zorder=10,
     )
 
-    ax.annotate(
-        f"u = {uval:.3f}",
-        xy=(x_pos, 0.95),
+    annotation = ax.annotate(
+        f"u-value = {uval:.3f}",
+        xy=(x_pos, 0.92),
         xycoords=("data", "axes fraction"),
-        xytext=(6, 0),
+        xytext=(-8, 0),
         textcoords="offset points",
-        ha="left",
+        ha="right",
         va="top",
-        color="red",
-        fontsize=11,
+        color="black",
+        fontsize=13,
+        zorder=11,
+        bbox={
+            "boxstyle": "round,pad=0.25",
+            "facecolor": "white",
+            "edgecolor": "0.55",
+            "linewidth": 1.0,
+            "alpha": 0.95,
+        },
+        annotation_clip=False,
     )
 
+    return line, annotation
 
 def _ecdf(arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     arr = np.asarray(arr, dtype=float)
@@ -222,8 +238,8 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                     uval = float(table_uval.at[0, stat])
 
                     # Ensure both zero and the u-value threshold are visible
-                    xmin = min(lo, 0.0, uval)
-                    xmax = max(hi, 0.0, uval)
+                    xmin = min(lo, 0.0, delta_uval)
+                    xmax = max(hi, 0.0, delta_uval)
 
                     if np.isclose(xmin, xmax):
                         padding = max(abs(xmin) * 0.05, 0.01)
@@ -241,17 +257,43 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
                         x_pos=delta_uval,
                     )
 
-                ax.set_title(title, fontsize=14)
-                ax.set_xlabel("Observed − Counterfactual")
-                ax.set_ylabel("Density")
+                ax.set_title(
+                    title,
+                    fontsize=14,
+                    pad=16,
+                )
+
+                ax.set_xlabel(
+                    "Observed − Counterfactual",
+                    fontsize=12,
+                    labelpad=16,
+                )
+
+                ax.set_ylabel(
+                    "Density",
+                    fontsize=12,
+                    labelpad=10,
+                )
+
+                ax.tick_params(
+                    axis="x",
+                    labelsize=11,
+                    pad=8,
+                )
+
+                ax.tick_params(
+                    axis="y",
+                    labelsize=11,
+                    pad=6,
+                )
 
             fig.subplots_adjust(
                 left=0.10,
                 right=0.97,
                 bottom=0.07,
                 top=0.96,
-                wspace=0.25,   # horizontal space between columns
-                hspace=0.45,   # vertical space between rows
+                wspace=0.28,   # horizontal space between columns
+                hspace=0.72,   # vertical space between rows
             )
 
             plt.show()
