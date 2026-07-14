@@ -8,7 +8,7 @@ from .deps import IMBLEARN_OK
 from .core import RunResult, build_estimator, build_preprocessor, evaluate_run
 from .utils import to_proba, fit_with_optional_sample_weight, youden_threshold
 from .FairModel_helper import make_standard_fair_model
-from ..FairModel import FairModel
+from FairModel import FairModel
 
 def compute_reweights(y: pd.Series, a: pd.Series) -> np.ndarray:
     """

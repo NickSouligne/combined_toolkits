@@ -8,7 +8,7 @@ from .utils import (
     youden_threshold, to_proba, confusion_rates,input_repair_standardize_by_group, apply_multiaccuracy_boost, _build_auditor, _logit, _make_group_onehot, _sigmoid
 )
 from .FairModel_helper import InputRepairPredictor, make_predictor_fair_model, StandardPredictor, MultiaccuracyBoostPredictor, RejectOptionShiftPredictor, KamiranRejectOptionPredictor
-from ..FairModel import FairModel
+from FairModel import FairModel
 
 def group_thresholds_youden(groups: pd.Series, y_val: np.ndarray, p_val: np.ndarray) -> Dict[str, float]:
     """

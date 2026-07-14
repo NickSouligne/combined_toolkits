@@ -16,7 +16,7 @@ from .techniques_post import (
 from .deps import IMBLEARN_OK, FAIRLEARN_OK, LogisticRegression
 from .techniques_in import run_prejudice_remover, fit_isotonic_by_group, apply_isotonic_by_group
 from .FairModel_helper import make_standard_fair_model, CombinedPipelinePredictor
-from ..FairModel import FairModel
+from FairModel import FairModel
 
 
 

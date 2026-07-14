@@ -11,7 +11,7 @@ from .utils import (
 )
 from .techniques_pre import compute_reweights, local_massaging_fit_flip
 from .FairModel_helper import GroupModelPredictor, make_standard_fair_model, StandardPredictor, make_predictor_fair_model, PrejudiceRemoverPredictor, GroupBalancedEnsemblePredictor
-from ..FairModel import FairModel
+from FairModel import FairModel
 
 
 def run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):

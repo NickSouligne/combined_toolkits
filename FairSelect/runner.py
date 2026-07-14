@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from .utils import confusion_rates, filter_intersectional_groups
 import FairLogue as ift
 import pandas as pd
-from ..FairModel import FairModel
+from FairModel import FairModel
 
 from .core import RunResult, split_data
 
