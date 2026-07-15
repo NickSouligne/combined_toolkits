@@ -271,56 +271,161 @@ def run_prejudice_remover(model_name, params,
     )
 
 
-
-
-def run_group_balanced_ensemble(model_name, params, K, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_group_balanced_ensemble(
+    model_name,
+    params,
+    K,
+    X_tr,
+    X_va,
+    X_te,
+    y_tr,
+    y_va,
+    y_te,
+    A_tr,
+    A_va,
+    A_te,
+    protected_cols,
+    all_df_train,
+):
     """
-    In-processing: group-balanced ensemble.
+    Train an ensemble of K models using group-balanced bootstrap
+    samples of the training set.
 
-    Idea:
-      - Build a preprocessor on train+val.
-      - For k = 1..K:
-          * Draw a group-balanced bootstrap sample of the training data.
-          * Train a model on that sample.
-          * Predict probabilities on the (shared) test set.
-      - Average the K probability vectors to form ensemble predictions.
-      - Classify at 0.5 threshold and evaluate.
-
-    Group-balanced bootstrap:
-      - group_balanced_bootstrap_indices produces indices so that each group
-        is roughly equally represented in the sample, improving fairness
-        robustness across groups.
+    Each fitted estimator is retained so the resulting FairModel
+    can reproduce the ensemble probabilities during FairLogue
+    auditing.
     """
-    #Build preprocessor on train+val
-    prep = build_preprocessor(pd.concat([X_tr,X_va]), protected_cols)
-    #Fit preprocessor on train+val
-    Xt = prep.fit_transform(X_tr)
-    #Transform test set
-    Xt_te = prep.transform(X_te)
-    #Convert group labels to numpy array for bootstrap 
-    A_arr = A_tr.to_numpy()
-    preds = [] #Store K prediction vectors
 
-    #Train K models on group-balanced bootstraps
-    for k in range(K):
-        #Draw a group-balanced bootstrap sample from training data
-        idx = group_balanced_bootstrap_indices(A_arr, size=len(A_arr))
-        #Build estimator for the ensemble member
-        clf = build_estimator(model_name, params)
-        #Fit on the resampled training data
-        clf.fit(Xt[idx], y_tr.to_numpy()[idx])
-        #Predict probabilities on the full shared test set
-        preds.append(to_proba(clf, Xt_te))
-    #Average the K prediction vectors to form ensemble probabilities
-    P = np.mean(np.vstack(preds), axis=0)
-    yhat = (P >= 0.5).astype(int) #Hard predictions at 0.5 threshold
-    ensemble_predictor = GroupBalancedEnsemblePredictor(
-            features=list(X_tr.columns),
-            protected_cols=list(protected_cols),
-            preprocessor=prep,
-            estimators=estimators,
-            threshold=0.5,
+    del all_df_train  # Not used by this runner
+    del A_va          # Not used by this runner
+
+    if K < 1:
+        raise ValueError(
+            f"K must be at least 1. Received K={K}."
         )
+
+    if len(X_tr) != len(y_tr) or len(X_tr) != len(A_tr):
+        raise ValueError(
+            "Training inputs are not aligned: "
+            f"len(X_tr)={len(X_tr)}, "
+            f"len(y_tr)={len(y_tr)}, "
+            f"len(A_tr)={len(A_tr)}."
+        )
+
+    if len(X_te) != len(y_te) or len(X_te) != len(A_te):
+        raise ValueError(
+            "Test inputs are not aligned: "
+            f"len(X_te)={len(X_te)}, "
+            f"len(y_te)={len(y_te)}, "
+            f"len(A_te)={len(A_te)}."
+        )
+
+    # Fit preprocessing using training data only.
+    # Using validation data to fit preprocessing is unnecessary
+    # and can leak validation-set information.
+    prep = build_preprocessor(
+        X_tr,
+        protected_cols,
+    )
+
+    X_train_transformed = prep.fit_transform(X_tr)
+    X_test_transformed = prep.transform(X_te)
+
+    y_train = np.asarray(
+        pd.Series(y_tr).astype(int),
+        dtype=int,
+    ).ravel()
+
+    group_train = (
+        pd.Series(A_tr)
+        .astype(str)
+        .to_numpy()
+    )
+
+    # Store both:
+    #   preds      -> test probability vector from each model
+    #   estimators -> each fitted estimator used by FairModel
+    preds = []
+    estimators = []
+
+    for k in range(int(K)):
+        bootstrap_indices = group_balanced_bootstrap_indices(
+            group_train,
+            size=len(group_train),
+        )
+
+        bootstrap_indices = np.asarray(
+            bootstrap_indices,
+            dtype=int,
+        )
+
+        if bootstrap_indices.ndim != 1:
+            bootstrap_indices = bootstrap_indices.ravel()
+
+        if len(bootstrap_indices) == 0:
+            raise RuntimeError(
+                f"Bootstrap iteration {k + 1} returned no rows."
+            )
+
+        estimator = build_estimator(
+            model_name,
+            dict(params or {}),
+        )
+
+        estimator.fit(
+            X_train_transformed[bootstrap_indices],
+            y_train[bootstrap_indices],
+        )
+
+        model_probabilities = to_proba(
+            estimator,
+            X_test_transformed,
+        )
+
+        model_probabilities = np.asarray(
+            model_probabilities,
+            dtype=float,
+        ).ravel()
+
+        if len(model_probabilities) != len(X_te):
+            raise RuntimeError(
+                f"Ensemble member {k + 1} returned "
+                f"{len(model_probabilities)} probabilities for "
+                f"{len(X_te)} test observations."
+            )
+
+        preds.append(model_probabilities)
+
+        # This was missing in the existing implementation.
+        estimators.append(estimator)
+
+    if not estimators:
+        raise RuntimeError(
+            "No ensemble estimators were successfully fitted."
+        )
+
+    probability_matrix = np.vstack(preds)
+
+    P = np.mean(
+        probability_matrix,
+        axis=0,
+    )
+
+    P = np.clip(
+        np.asarray(P, dtype=float).ravel(),
+        0.0,
+        1.0,
+    )
+
+    yhat = (P >= 0.5).astype(int)
+
+    ensemble_predictor = GroupBalancedEnsemblePredictor(
+        features=list(X_tr.columns),
+        protected_cols=list(protected_cols),
+        preprocessor=prep,
+        estimators=estimators,
+        threshold=0.5,
+    )
 
     fair_model = FairModel(
         name=f"In: Ensemble (K={K})",
@@ -332,9 +437,9 @@ def run_group_balanced_ensemble(model_name, params, K, X_tr, X_va, X_te, y_tr, y
         positive_label=1,
         metadata={
             "source": "FairSelect",
-            "technique": "In:Ensemble (K=5)",
+            "technique": f"In:Ensemble (K={K})",
             "model_name": model_name,
-            "model_params": params,
+            "model_params": dict(params or {}),
             "K": int(K),
             "bootstrap": "group_balanced",
             "n_estimators": len(estimators),
@@ -343,12 +448,12 @@ def run_group_balanced_ensemble(model_name, params, K, X_tr, X_va, X_te, y_tr, y
 
     return evaluate_run(
         f"In: Ensemble (K={K})",
-        y_te.to_numpy(),
+        y_te,
         P,
         yhat,
         A_te,
         fair_model=fair_model,
-        test_index=X_te.index,
+        test_index=list(X_te.index),
     )
 
 def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):

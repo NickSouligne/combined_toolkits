@@ -317,20 +317,27 @@ class GroupBalancedEnsemblePredictor:
         self.estimators = list(estimators)
         self.threshold = threshold
 
-    def predict_proba(self, df):
-        X = df[self.features].copy()
-        Xt = self.preprocessor.transform(X)
+    def predict_proba(self, X):
+        X_df = X[self.features].copy()
+        X_transformed = self.preprocessor.transform(X_df)
 
-        preds = [
-            to_proba(est, Xt)
-            for est in self.estimators
+        probabilities = [
+            to_proba(estimator, X_transformed)
+            for estimator in self.estimators
         ]
 
-        return np.mean(np.vstack(preds), axis=0)
+        return np.mean(
+            np.vstack(probabilities),
+            axis=0,
+        )
 
-    def predict(self, df):
-        p = self.predict_proba(df)
-        return (p >= self.threshold).astype(int)
+
+    def predict(self, X):
+        probabilities = self.predict_proba(X)
+
+        return (
+            probabilities >= self.threshold
+        ).astype(int)
     
 
 class ReductionsMetaPredictor:
