@@ -177,6 +177,7 @@ def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
@@ -242,7 +243,22 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         p = to_proba(clf, prep.transform(X_te))
         yhat = (p >= 0.5).astype(int) #Hard predictions at 0.5 threshold
         tag = "Pre: Oversample (fallback)" if not IMBLEARN_OK else "Pre: SMOTE (approx)"
-        return evaluate_run(tag, y_te.to_numpy(), p, yhat, A_te)
+        return evaluate_run(tag, y_te.to_numpy(), p, yhat, A_te, test_index=X_te.index, fair_model=make_standard_fair_model(
+            name=tag,
+            features=X_tr.columns,
+            protected_cols=protected_cols,
+            preprocessor=prep,
+            estimator=clf,
+            threshold=0.5,
+            outcome_col=None,
+            metadata={
+                "source": "FairSelect",
+                "technique": tag,
+                "model_name": model_name,
+                "model_params": params,
+                "uses_sample_weight": False,
+            },
+        ))
 
     #Use imblearn sampler to fit_resample
     #Obtain a balanced training set
@@ -277,6 +293,7 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
@@ -333,4 +350,5 @@ def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, 
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )

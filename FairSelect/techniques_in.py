@@ -93,6 +93,7 @@ def run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_prejudice_remover(model_name, params,
@@ -265,6 +266,7 @@ def run_prejudice_remover(model_name, params,
         yhat,
         A_eval,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 
@@ -345,6 +347,7 @@ def run_group_balanced_ensemble(model_name, params, K, X_tr, X_va, X_te, y_tr, y
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
@@ -408,6 +411,7 @@ def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te,
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_reductions_meta(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, constraint="EO"):
@@ -476,6 +480,7 @@ def run_reductions_meta(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, 
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_baseline(model_name, params,
@@ -522,11 +527,12 @@ def run_baseline(model_name, params,
 
     return evaluate_run(
         "Baseline",
-        y_te.to_numpy(),
+        y_te,
         p_test,
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 

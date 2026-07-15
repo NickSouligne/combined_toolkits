@@ -468,6 +468,7 @@ def run_combined_pipeline(model_name, params,
         yhat,
         Ate,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 

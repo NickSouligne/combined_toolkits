@@ -149,6 +149,7 @@ def run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, 
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 
@@ -287,6 +288,7 @@ def run_multiaccuracy_boost(
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 
@@ -392,6 +394,7 @@ def run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 def run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
@@ -459,6 +462,7 @@ def run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         yhat,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )
 
 
@@ -615,7 +619,7 @@ def run_reject_option_kamiran(
     if len(candidates) == 0:
         # Fallback to baseline, BUT preserve y_te / A_te types for evaluate_run
         yhat_te = (p_te >= base_threshold).astype(int)
-        return evaluate_run("Post: Kamiran Reject Option (fallback baseline)", y_te, p_te, yhat_te, A_te)
+        return evaluate_run("Post: Kamiran Reject Option (fallback baseline)", y_te, p_te, yhat_te, A_te, test_index=X_te.index)
 
     constrained = [c for c in candidates if c[5] and c[6]]
     pool = constrained if len(constrained) else candidates
@@ -678,4 +682,5 @@ def run_reject_option_kamiran(
         yhat_te,
         A_te,
         fair_model=fair_model,
+        test_index=X_te.index,
     )

@@ -28,6 +28,10 @@ class RunResult:
     fairlogue: dict | None = None
     fair_model: object | None = None
 
+    test_index: list | None = None
+    y_test: object | None = None
+    A_test: object | None = None
+
 #---Core training runners---
 def build_estimator(model_name: str, params: Dict[str, Any]):
     '''
@@ -228,6 +232,7 @@ def evaluate_run(
     fair_model=None,
     notes: str = "",
     run_fairlogue: bool = False,
+    test_index=None,
 ) -> RunResult:
     """
     Compute overall performance and fairness metrics for a single model run.
@@ -259,6 +264,33 @@ def evaluate_run(
         - overall: dict of scalar metrics (ACC, AUROC, EO_diff, etc.)
         - group_stats: DataFrame of per-group metrics
     """
+        # Preserve the held-out labels and group assignments for later auditing
+    y_test_saved = (
+        y_true.copy()
+        if hasattr(y_true, "copy")
+        else np.asarray(y_true).copy()
+    )
+
+    A_test_saved = (
+        groups.copy()
+        if hasattr(groups, "copy")
+        else np.asarray(groups).copy()
+    )
+
+    if test_index is not None:
+        test_index_saved = list(test_index)
+    elif hasattr(y_true, "index"):
+        test_index_saved = list(y_true.index)
+    elif hasattr(groups, "index"):
+        test_index_saved = list(groups.index)
+    else:
+        test_index_saved = None
+
+    # Existing conversions
+    y_true = np.asarray(y_true)
+    p = np.asarray(p)
+    yhat = np.asarray(yhat)
+
     #Ensures the inputs are arrays for reliable downstream processing
     y_true = np.asarray(y_true)
     p = np.asarray(p)
@@ -303,14 +335,17 @@ def evaluate_run(
             run_name=name,
         )
 
-    return RunResult(
-        name=name,
-        overall=overall,
-        group_stats=group_df,
-        notes=notes,
-        fairlogue=fairlogue_results,
-        fair_model=fair_model,
-    )
+        return RunResult(
+            name=name,
+            overall=overall,
+            group_stats=group_df,
+            notes=notes,
+            fairlogue=fairlogue_results,
+            fair_model=fair_model,
+            test_index=test_index_saved,
+            y_test=y_test_saved,
+            A_test=A_test_saved,
+        )
 
 
     return RunResult(name=name, overall=overall, group_stats=group_df)
