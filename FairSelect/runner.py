@@ -82,9 +82,9 @@ class PipelineConfig:
     min_group_size: int = 20
     require_outcome_coverage: bool = True
     filter_small_groups: bool = True
-    train_index: list | None = None
-    validation_index: list | None = None
-    test_index: list | None = None
+    train_index: Optional[Sequence[Any]] = None
+    validation_index: Optional[Sequence[Any]] = None
+    test_index: Optional[Sequence[Any]] = None
 
     test_size: float = 0.25
     val_size: float = 0.2
@@ -197,122 +197,76 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
     X.index = df.index
     y.index = df.index
     A.index = df.index
-
-    # ---------------------------------------------------------
-    # Apply supplied split indices or create a new split
-    # ---------------------------------------------------------
-    supplied_splits = [
-        cfg.train_index,
-        cfg.validation_index,
-        cfg.test_index,
-    ]
-
-    n_supplied = sum(
-        split_index is not None
-        for split_index in supplied_splits
-    )
-
-    if n_supplied not in {0, 3}:
-        raise ValueError(
-            "External split indices must be supplied together. "
-            "Provide train_index, validation_index, and test_index, "
-            "or leave all three as None."
-        )
-
-    if n_supplied == 3:
+    
+    if all(
+        index_set is not None
+        for index_set in [
+            cfg.train_index,
+            cfg.validation_index,
+            cfg.test_index,
+        ]
+    ):
         train_index = list(cfg.train_index)
-        validation_index = list(
-            cfg.validation_index
-        )
+        validation_index = list(cfg.validation_index)
         test_index = list(cfg.test_index)
 
-        all_requested_indices = (
-            train_index
-            + validation_index
-            + test_index
-        )
+        requested = train_index + validation_index + test_index
 
         missing_indices = [
-            index
-            for index in all_requested_indices
-            if index not in X.index
+            index for index in requested
+            if index not in df.index
         ]
 
         if missing_indices:
             raise ValueError(
-                f"{len(missing_indices)} supplied split indices "
-                "were not found in the FairSelect cohort. "
-                f"First missing indices: {missing_indices[:20]}"
+                "Caller-provided split indices were not found in df: "
+                f"{missing_indices[:20]}"
             )
 
-        train_set = set(train_index)
-        validation_set = set(validation_index)
-        test_set = set(test_index)
-
-        train_validation_overlap = (
-            train_set & validation_set
-        )
-        train_test_overlap = (
-            train_set & test_set
-        )
-        validation_test_overlap = (
-            validation_set & test_set
-        )
-
-        if train_validation_overlap:
+        if len(set(requested)) != len(requested):
             raise ValueError(
-                "train_index and validation_index overlap. "
-                f"First overlapping indices: "
-                f"{list(train_validation_overlap)[:20]}"
+                "Caller-provided train, validation, and test "
+                "indices overlap."
             )
 
-        if train_test_overlap:
-            raise ValueError(
-                "train_index and test_index overlap. "
-                f"First overlapping indices: "
-                f"{list(train_test_overlap)[:20]}"
-            )
+        X_tr = df.loc[train_index, features].copy()
+        X_va = df.loc[validation_index, features].copy()
+        X_te = df.loc[test_index, features].copy()
 
-        if validation_test_overlap:
-            raise ValueError(
-                "validation_index and test_index overlap. "
-                f"First overlapping indices: "
-                f"{list(validation_test_overlap)[:20]}"
-            )
+        y_tr = df.loc[train_index, cfg.target].copy()
+        y_va = df.loc[validation_index, cfg.target].copy()
+        y_te = df.loc[test_index, cfg.target].copy()
 
-        X_tr = X.loc[train_index].copy()
-        X_va = X.loc[validation_index].copy()
-        X_te = X.loc[test_index].copy()
-
-        y_tr = y.loc[train_index].copy()
-        y_va = y.loc[validation_index].copy()
-        y_te = y.loc[test_index].copy()
-
-        A_tr = A.loc[train_index].copy()
-        A_va = A.loc[validation_index].copy()
-        A_te = A.loc[test_index].copy()
+        A_tr = (
+            df.loc[train_index, protected]
+            .astype(str)
+            .agg("|".join, axis=1)
+        )
+        A_va = (
+            df.loc[validation_index, protected]
+            .astype(str)
+            .agg("|".join, axis=1)
+        )
+        A_te = (
+            df.loc[test_index, protected]
+            .astype(str)
+            .agg("|".join, axis=1)
+        )
 
     else:
-        (
-            X_tr,
-            X_va,
-            X_te,
-            y_tr,
-            y_va,
-            y_te,
-            A_tr,
-            A_va,
-            A_te,
-        ) = split_data(
-            X,
-            y,
-            A,
-            test_size=cfg.test_size,
-            val_size=cfg.val_size,
-            random_state=cfg.random_state,
+        X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te = (
+            split_data(
+                df[[*features, *protected, cfg.target]],
+                cfg.target,
+                protected,
+                features,
+                test_size=cfg.test_size,
+                val_size=cfg.val_size,
+                random_state=cfg.random_state,
+            )
         )
 
-    # Keep full train (GUI does train+val concat). :contentReference[oaicite:5]{index=5}
+    # Keep full train (GUI does train+val concat)
     all_df_train = pd.concat([X_tr, X_va], axis=0)
 
     model_name = cfg.model_name
@@ -331,7 +285,7 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
             )
         )
 
-    # Technique dispatch mirrors GUI exactly. :contentReference[oaicite:6]{index=6} :contentReference[oaicite:7]{index=7}
+    # Technique dispatch mirrors GUI exactly.
     selected = _selected_dict(cfg.techniques)
 
     # Pre
@@ -862,6 +816,7 @@ def _run_fairlogue_component3_for_result(
                 "Component 3 currently expects at least two "
                 "protected characteristics."
             ),
+
         }
 
     try:
