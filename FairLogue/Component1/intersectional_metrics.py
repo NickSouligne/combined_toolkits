@@ -363,7 +363,7 @@ def evaluate_intersectional_fairness(
         return_non_intersectional: bool = False,
         min_group_size: int = 0,
         require_class_balance: bool = False,
-    ):-> Tuple[FairnessResults, Dict[str, plt.Figure]]:
+):-> Tuple[FairnessResults, Dict[str, plt.Figure]]:
     
     #Check that protected characteristics and outcome are in data
     for col in (outcome, protected_1, protected_2):
