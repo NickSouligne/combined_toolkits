@@ -88,7 +88,7 @@ def predict_with_group_thresholds(groups: pd.Series, p: np.ndarray, thresholds: 
     return yhat
 
 
-def run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col):
     '''
     Post-processing: per-group Youden-optimal thresholds.
 
@@ -132,7 +132,7 @@ def run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, 
         protected_cols=protected_cols,
         predictor=predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "Post:Youden per group",
@@ -173,6 +173,7 @@ def run_multiaccuracy_boost(
     random_state=0,
     eps=1e-6,
     include_group_in_auditor=True,
+    outcome_col=None,
 ):
     """
     Kim et al. (2018)-style Multiaccuracy Boost (practical implementation).
@@ -265,7 +266,7 @@ def run_multiaccuracy_boost(
         protected_cols=list(protected_cols),
         predictor=ma_predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",
@@ -292,7 +293,7 @@ def run_multiaccuracy_boost(
     )
 
 
-def run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=None):
     """
     Post-processing: simple reject-option-style threshold shifting.
     Loosely based on Hardt et al. (2016) Equality of Opportunity in supervised learning
@@ -370,7 +371,7 @@ def run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_
         predictor=reject_predictor,
         threshold=0.5,
         group_thresholds=th,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",
@@ -397,7 +398,7 @@ def run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_
         test_index=X_te.index,
     )
 
-def run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=None):
     '''
     Post-processing: input repair via per-group standardization alignment.
 
@@ -442,7 +443,7 @@ def run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         protected_cols=list(protected_cols),
         predictor=input_repair_predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",
@@ -480,6 +481,7 @@ def run_reject_option_kamiran(
     fairness_bound=None,
     max_acc_drop=None,
     unprivileged_values=None,
+    outcome_col=None,
 ):
     """
     Kamiran-style Reject Option Classification (ROC) post-processing.
@@ -654,7 +656,7 @@ def run_reject_option_kamiran(
         protected_cols=list(protected_cols),
         predictor=kamiran_predictor,
         threshold=base_threshold,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",

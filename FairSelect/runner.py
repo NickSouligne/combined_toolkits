@@ -185,7 +185,7 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
                 model_name, params,
                 X_tr, X_va, X_te, y_tr, y_va, y_te,
                 A_tr, A_va, A_te,
-                protected, all_df_train
+                protected, all_df_train, outcome_col=cfg.target,
             )
         )
 
@@ -194,19 +194,19 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
 
     # Pre
     if selected["Pre:Reweight (y,a)"]:
-        results.append(run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["Pre:SMOTE / Oversample"]:
-        results.append(run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["Pre:Local Massaging"]:
-        results.append(run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
 
     # In
     if selected["In:Compositional per-group"]:
-        results.append(run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["In:Ensemble (K=5)"]:
-        results.append(run_group_balanced_ensemble(model_name, params, 5, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_group_balanced_ensemble(model_name, params, 5, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["In:Multicalibration (isotonic)"]:
-        results.append(run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["In:Reductions (EO)"]:
         results.append(run_reductions_meta(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, constraint="EO"))
     if selected["In:Fairness Regularization (Prejudice Remover)"]:
@@ -216,20 +216,21 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
             A_tr, A_va, A_te,
             protected, all_df_train,
             eta=25.0,
+            outcome_col=cfg.target
         ))
 
     # Post
     if selected["Post:Youden per group"]:
-        results.append(run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["Post:Multiaccuracy Boost"]:
-        results.append(run_multiaccuracy_boost(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_multiaccuracy_boost(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["Post:Reject-Option Shift"]:
-        results.append(run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["Post:Input Repair"]:
-        results.append(run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train))
+        results.append(run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
     if selected["Post:Reject-Option Kamiran"]:
         results.append(run_reject_option_kamiran(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, fairness_objective="eod", 
-                                                 fairness_bound=0.05, max_acc_drop=0.02))
+                                                 fairness_bound=0.05, max_acc_drop=0.02, outcome_col=cfg.target))
 
     # Combined
     if cfg.run_combined:
@@ -239,6 +240,7 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
             A_tr, A_va, A_te,
             protected, all_df_train,
             selected=selected,
+            outcome_col=cfg.target
         )
         results.append(combined_rr)
     

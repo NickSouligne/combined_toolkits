@@ -15,7 +15,7 @@ from .FairModel_helper import GroupModelPredictor, make_standard_fair_model, Sta
 from FairModel import FairModel
 
 
-def run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col = None):
     '''
     Runs compositional per-group models (in-processing): one model per group in training data
     Falls back to pooled model if group not seen in training data
@@ -77,6 +77,7 @@ def run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y
         features=X_tr.columns,
         protected_cols=protected_cols,
         predictor=predictor,
+        outcome_col=outcome_col,
         threshold=0.5,
         metadata={
             "source": "FairSelect",
@@ -101,7 +102,7 @@ def run_prejudice_remover(model_name, params,
                           X_tr, X_va, X_te, y_tr, y_va, y_te,
                           A_tr, A_va, A_te,
                           protected_cols, all_df_train,
-                          *, eta: float = 25.0):
+                          *, eta: float = 25.0, outcome_col = None):
     """
     In-processing fairness regularization using AIF360 PrejudiceRemover.
     Not well validated yet, use with caution.
@@ -244,7 +245,7 @@ def run_prejudice_remover(model_name, params,
         protected_cols=list(protected_cols),
         predictor=pr_predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",
@@ -286,6 +287,7 @@ def run_group_balanced_ensemble(
     A_te,
     protected_cols,
     all_df_train,
+    outcome_col=None,
 ):
     """
     Train an ensemble of K models using group-balanced bootstrap
@@ -433,7 +435,7 @@ def run_group_balanced_ensemble(
         protected_cols=list(protected_cols),
         predictor=ensemble_predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",
@@ -456,7 +458,7 @@ def run_group_balanced_ensemble(
         test_index=list(X_te.index),
     )
 
-def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col = None):
     '''
     In-processing: per-group multicalibration using isotonic regression.
 
@@ -500,7 +502,7 @@ def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te,
         protected_cols=protected_cols,
         predictor=predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "In:Multicalibration (isotonic)",
@@ -551,6 +553,7 @@ class ReductionsPredictor:
         preprocessor,
         estimator,
         threshold=0.5,
+        outcome_col=None,
     ):
         self.features = list(features)
         self.protected_cols = list(protected_cols)
@@ -854,6 +857,7 @@ def run_reductions_meta(
     protected_cols,
     all_df_train,
     constraint="EO",
+    outcome_col=None,
 ):
     """
     Run Fairlearn ExponentiatedGradient using any FairSelect
@@ -1242,7 +1246,7 @@ def run_reductions_meta(
         protected_cols=list(protected_cols),
         predictor=reductions_predictor,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",

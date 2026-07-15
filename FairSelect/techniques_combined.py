@@ -22,7 +22,7 @@ from FairModel import FairModel
 
 def run_combined_pipeline(model_name, params,
                           X_tr, X_va, X_te, y_tr, y_va, y_te,
-                          A_tr, A_va, A_te, protected_cols, all_df_train,
+                          A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col,
                           selected: Dict[str, bool]) -> RunResult:
     """
     Compose selected techniques into one run in this order:
@@ -439,7 +439,7 @@ def run_combined_pipeline(model_name, params,
         threshold=0.5,
         group_thresholds=group_thresholds_for_fairmodel or {},
         calibrators=calibrators_for_fairmodel or {},
-        outcome_col=None,
+        outcome_col=outcome_col,
         positive_label=1,
         metadata={
             "source": "FairSelect",

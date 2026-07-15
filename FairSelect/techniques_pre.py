@@ -126,7 +126,7 @@ def local_massaging_fit_flip(y_train: pd.Series, scores: np.ndarray, a_train: pd
     return y
 
 
-def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=None):
     """
     Pre-processing: reweighting by (y, a) via compute_reweights.
 
@@ -160,7 +160,7 @@ def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr
         preprocessor=prep,
         estimator=clf,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "Pre:Reweight (y,a)",
@@ -180,7 +180,7 @@ def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr
         test_index=X_te.index,
     )
 
-def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=None):
     """
     Pre-processing: class-balancing via SMOTE or oversampling.
 
@@ -250,7 +250,7 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
             preprocessor=prep,
             estimator=clf,
             threshold=0.5,
-            outcome_col=None,
+            outcome_col=outcome_col,
             metadata={
                 "source": "FairSelect",
                 "technique": tag,
@@ -276,7 +276,7 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         preprocessor=prep,
         estimator=clf,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "Pre:SMOTE / Oversample",
@@ -296,7 +296,7 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         test_index=X_te.index,
     )
 
-def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train):
+def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=None):
     """
     Pre-processing: label massaging based on boundary scores.
 
@@ -334,7 +334,7 @@ def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, 
         preprocessor=prep,
         estimator=clf,
         threshold=0.5,
-        outcome_col=None,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "Pre:Local Massaging",
