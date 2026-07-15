@@ -1,8 +1,9 @@
 from typing import Any, Dict
-
+import inspect
+import warnings
 import numpy as np
 import pandas as pd
-
+import sklearn
 from .deps import FAIRLEARN_OK, ExponentiatedGradient, EqualizedOdds, DemographicParity, IsotonicRegression, AIF360_OK
 from .core import build_estimator, build_preprocessor, evaluate_run, RunResult
 from .utils import (
@@ -414,47 +415,724 @@ def run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te,
         test_index=X_te.index,
     )
 
-def run_reductions_meta(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, constraint="EO"):
+
+class ReductionsPredictor:
     """
-    In-processing: Fairlearn reductions (ExponentiatedGradient) wrapper.
+    FairModel-compatible wrapper for a fitted Fairlearn
+    ExponentiatedGradient classifier.
+
+    This wrapper:
+
+    1. Accepts raw pandas DataFrames.
+    2. Selects the same feature columns used during training.
+    3. Applies the fitted FairSelect preprocessor.
+    4. Computes the expected positive-class probability from
+       the ExponentiatedGradient mixture.
+    5. Produces deterministic hard predictions at a threshold.
+
+    Notes
+    -----
+    ExponentiatedGradient.predict() is randomized. For model
+    evaluation and FairLogue auditing, this wrapper instead uses
+    the weighted expected prediction across predictors_ so that
+    repeated audits are reproducible.
+    """
+
+    def __init__(
+        self,
+        *,
+        features,
+        protected_cols,
+        preprocessor,
+        estimator,
+        threshold=0.5,
+    ):
+        self.features = list(features)
+        self.protected_cols = list(protected_cols)
+        self.preprocessor = preprocessor
+        self.estimator = estimator
+        self.threshold = float(threshold)
+
+    def _prepare_raw_features(self, X):
+        """
+        Return a DataFrame containing the same raw feature columns
+        used to train the FairSelect preprocessor.
+        """
+        if isinstance(X, pd.DataFrame):
+            X_df = X.copy()
+        else:
+            X_array = np.asarray(X)
+
+            if X_array.ndim == 1:
+                X_array = X_array.reshape(1, -1)
+
+            if X_array.shape[1] != len(self.features):
+                raise ValueError(
+                    "ReductionsPredictor received an array with "
+                    f"{X_array.shape[1]} columns, but "
+                    f"{len(self.features)} features were expected."
+                )
+
+            X_df = pd.DataFrame(
+                X_array,
+                columns=self.features,
+            )
+
+        missing_features = [
+            feature
+            for feature in self.features
+            if feature not in X_df.columns
+        ]
+
+        if missing_features:
+            raise ValueError(
+                "The input data are missing features required by "
+                f"the reductions model: {missing_features}"
+            )
+
+        return X_df[self.features].copy()
+
+    def _transform(self, X):
+        X_df = self._prepare_raw_features(X)
+        return self.preprocessor.transform(X_df)
+
+    @staticmethod
+    def _positive_class_output(predictor, X_transformed):
+        """
+        Obtain a positive-class score from one fitted base learner.
+
+        Most ExponentiatedGradient base learners expose predict(),
+        whose binary 0/1 output can be treated as the positive-class
+        contribution to the mixture. If predict_proba() is available,
+        use it to preserve continuous probabilities.
+        """
+        if hasattr(predictor, "predict_proba"):
+            probabilities = np.asarray(
+                predictor.predict_proba(X_transformed),
+                dtype=float,
+            )
+
+            if probabilities.ndim == 2:
+                if probabilities.shape[1] == 1:
+                    return probabilities[:, 0]
+
+                classes = getattr(
+                    predictor,
+                    "classes_",
+                    None,
+                )
+
+                if classes is not None:
+                    classes = np.asarray(classes)
+
+                    positive_locations = np.flatnonzero(
+                        classes == 1
+                    )
+
+                    if len(positive_locations) == 1:
+                        return probabilities[
+                            :,
+                            positive_locations[0],
+                        ]
+
+                return probabilities[:, -1]
+
+            return probabilities.ravel()
+
+        predictions = np.asarray(
+            predictor.predict(X_transformed),
+            dtype=float,
+        ).ravel()
+
+        return predictions
+
+    def predict_proba(self, X):
+        """
+        Return P(Y=1) as a one-dimensional array.
+
+        The returned score is the weighted average of positive-class
+        outputs from all fitted ExponentiatedGradient predictors.
+        """
+        X_transformed = self._transform(X)
+
+        fitted_predictors = getattr(
+            self.estimator,
+            "predictors_",
+            None,
+        )
+
+        mixture_weights = getattr(
+            self.estimator,
+            "weights_",
+            None,
+        )
+
+        if fitted_predictors is None or mixture_weights is None:
+            # Compatibility fallback for Fairlearn versions exposing
+            # a probability-mass prediction method.
+            if hasattr(self.estimator, "_pmf_predict"):
+                probability_mass = np.asarray(
+                    self.estimator._pmf_predict(
+                        X_transformed
+                    ),
+                    dtype=float,
+                )
+
+                if (
+                    probability_mass.ndim == 2
+                    and probability_mass.shape[1] >= 2
+                ):
+                    return np.clip(
+                        probability_mass[:, 1],
+                        0.0,
+                        1.0,
+                    )
+
+                return np.clip(
+                    probability_mass.ravel(),
+                    0.0,
+                    1.0,
+                )
+
+            # Last-resort fallback. This can be randomized in
+            # Fairlearn, so it is less desirable than predictors_.
+            predictions = np.asarray(
+                self.estimator.predict(X_transformed),
+                dtype=float,
+            ).ravel()
+
+            return np.clip(predictions, 0.0, 1.0)
+
+        predictors = list(fitted_predictors)
+
+        if isinstance(mixture_weights, pd.Series):
+            weights = mixture_weights.to_numpy(dtype=float)
+        else:
+            weights = np.asarray(
+                mixture_weights,
+                dtype=float,
+            ).ravel()
+
+        if len(predictors) != len(weights):
+            raise RuntimeError(
+                "ExponentiatedGradient predictors_ and weights_ "
+                "have different lengths: "
+                f"{len(predictors)} versus {len(weights)}."
+            )
+
+        valid = np.isfinite(weights) & (weights > 0)
+
+        if not valid.any():
+            raise RuntimeError(
+                "ExponentiatedGradient did not produce any "
+                "positive finite mixture weights."
+            )
+
+        valid_predictors = [
+            predictor
+            for predictor, keep in zip(predictors, valid)
+            if keep
+        ]
+
+        valid_weights = weights[valid]
+        valid_weights = valid_weights / valid_weights.sum()
+
+        component_predictions = np.column_stack([
+            self._positive_class_output(
+                predictor,
+                X_transformed,
+            )
+            for predictor in valid_predictors
+        ])
+
+        probabilities = component_predictions @ valid_weights
+
+        return np.clip(
+            np.asarray(probabilities, dtype=float).ravel(),
+            0.0,
+            1.0,
+        )
+
+    def predict(self, X):
+        probabilities = self.predict_proba(X)
+
+        return (
+            probabilities >= self.threshold
+        ).astype(int)
+
+def _supports_sample_weight(estimator) -> bool:
+    """
+    Determine whether estimator.fit() explicitly accepts
+    sample_weight or accepts arbitrary keyword arguments.
+    """
+    try:
+        signature = inspect.signature(estimator.fit)
+    except (TypeError, ValueError):
+        return False
+
+    parameters = signature.parameters
+
+    if "sample_weight" in parameters:
+        return True
+
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
+def _prepare_reductions_params(
+    model_name,
+    params,
+):
+    """
+    Remove estimator-level weighting parameters that would otherwise
+    compound the observation weights generated by Fairlearn.
+    """
+    reductions_params = dict(params or {})
+
+    # Fairlearn generates its own observation weights during each
+    # cost-sensitive classification iteration.
+    reductions_params.pop("sample_weight", None)
+
+    if model_name in {
+        "Logistic Regression",
+        "Random Forest",
+    }:
+        reductions_params["class_weight"] = None
+
+    if model_name == "XGBoost":
+        reductions_params.pop("scale_pos_weight", None)
+
+    if model_name == "LightGBM":
+        reductions_params.pop("is_unbalance", None)
+        reductions_params.pop("scale_pos_weight", None)
+        reductions_params.pop("class_weight", None)
+
+    return reductions_params
+
+
+def _make_constraint(constraint):
+    normalized_constraint = str(constraint).strip().upper()
+
+    if normalized_constraint in {
+        "EO",
+        "EQUALIZED_ODDS",
+        "EQUALIZED ODDS",
+    }:
+        return "EO", EqualizedOdds()
+
+    if normalized_constraint in {
+        "DP",
+        "DEMOGRAPHIC_PARITY",
+        "DEMOGRAPHIC PARITY",
+    }:
+        return "DP", DemographicParity()
+
+    raise ValueError(
+        "constraint must be one of: 'EO', 'Equalized Odds', "
+        "'DP', or 'Demographic Parity'. "
+        f"Received {constraint!r}."
+    )
+def run_reductions_meta(
+    model_name,
+    params,
+    X_tr,
+    X_va,
+    X_te,
+    y_tr,
+    y_va,
+    y_te,
+    A_tr,
+    A_va,
+    A_te,
+    protected_cols,
+    all_df_train,
+    constraint="EO",
+):
+    """
+    Run Fairlearn ExponentiatedGradient using any FairSelect
+    estimator whose fit() method supports sample_weight.
+
+    Supported FairSelect model names
+    --------------------------------
+    - Logistic Regression
+    - Random Forest
+    - Decision Tree
+    - Neural Network
+    - SVM
+    - XGBoost
+    - LightGBM
+
+    Actual compatibility is checked from the constructed estimator,
+    rather than inferred only from the model name.
 
     Parameters
     ----------
+    model_name
+        FairSelect model name.
+
+    params
+        Hyperparameters selected for the base estimator.
+
+    X_tr, X_va, X_te
+        Training, validation, and test feature DataFrames.
+
+    y_tr, y_va, y_te
+        Binary outcome labels.
+
+    A_tr, A_va, A_te
+        Intersectional protected-group labels.
+
+    protected_cols
+        Original protected-characteristic column names.
+
+    all_df_train
+        Retained for compatibility with the other FairSelect runners.
+
     constraint : {"EO", "DP"}
-        Which fairness constraint to use:
-          - "EO" : Equalized Odds
-          - "DP" : Demographic Parity
+        "EO" applies Equalized Odds.
+        "DP" applies Demographic Parity.
 
-    Workflow:
-      1. If fairlearn is unavailable or the given model is not supported,
-         fall back to the baseline.
-      2. Build and fit a preprocessor on train+val.
-      3. Instantiate a base estimator and wrap it in ExponentiatedGradient
-         with the chosen fairness constraint.
-      4. Fit on transformed training features with A_tr as sensitive_features.
-      5. Predict on test, threshold at 0.5, and evaluate.
+    Returns
+    -------
+    RunResult
+        FairSelect evaluation result with an attached FairModel.
     """
-    if not FAIRLEARN_OK or model_name not in ["Logistic Regression", "SVM", "Decision Tree"]:
-        #we wrap a simple fallback
-        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train)
 
-    #Build preprocessor on train+val
-    prep = build_preprocessor(pd.concat([X_tr,X_va]), protected_cols)
-    #Fit preprocessor on train+val
-    prep.fit(pd.concat([X_tr,X_va]))
-    #Build base estimator
-    base = build_estimator(model_name, params)
-    #Choose fairness constraint
-    cons = EqualizedOdds() if constraint=="EO" else DemographicParity()
-    #Wrap base estimator in ExponentiatedGradient with the chosen constraint
-    eg = ExponentiatedGradient(estimator=base, constraints=cons)
-    #Fit on transformed training data with sensitive features
-    eg.fit(prep.transform(X_tr), y_tr, sensitive_features=A_tr)
-    #Predict probabilities on transformed test set
-    p = to_proba(eg, prep.transform(X_te))
-    yhat = (p >= 0.5).astype(int) #Hard predictions at 0.5 threshold
+    del all_df_train  # Unused in this runner
+
+    if not FAIRLEARN_OK:
+        raise ImportError(
+            "Fairlearn is unavailable. ExponentiatedGradient "
+            "cannot be run. Install a compatible Fairlearn version "
+            "rather than silently returning a baseline result."
+        )
+
+    allowed_model_names = {
+        "Logistic Regression",
+        "Random Forest",
+        "Decision Tree",
+        "Neural Network",
+        "SVM",
+        "XGBoost",
+        "LightGBM",
+    }
+
+    if model_name not in allowed_model_names:
+        raise ValueError(
+            f"Unknown FairSelect model name {model_name!r}. "
+            "Expected one of: "
+            f"{sorted(allowed_model_names)}"
+        )
+
+    constraint_name, fairness_constraint = (
+        _make_constraint(constraint)
+    )
+
+    # ---------------------------------------------------------
+    # Validate alignment before fitting
+    # ---------------------------------------------------------
+    if len(X_tr) != len(y_tr) or len(X_tr) != len(A_tr):
+        raise ValueError(
+            "Training data are not aligned: "
+            f"len(X_tr)={len(X_tr)}, "
+            f"len(y_tr)={len(y_tr)}, "
+            f"len(A_tr)={len(A_tr)}."
+        )
+
+    if len(X_te) != len(y_te) or len(X_te) != len(A_te):
+        raise ValueError(
+            "Test data are not aligned: "
+            f"len(X_te)={len(X_te)}, "
+            f"len(y_te)={len(y_te)}, "
+            f"len(A_te)={len(A_te)}."
+        )
+
+    y_train = np.asarray(
+        pd.Series(y_tr).astype(int),
+        dtype=int,
+    ).ravel()
+
+    y_test = np.asarray(
+        pd.Series(y_te).astype(int),
+        dtype=int,
+    ).ravel()
+
+    sensitive_train = (
+        pd.Series(A_tr)
+        .astype(str)
+        .to_numpy()
+    )
+
+    sensitive_test = (
+        pd.Series(A_te)
+        .astype(str)
+        .to_numpy()
+    )
+
+    unique_outcomes = np.unique(y_train)
+
+    if not set(unique_outcomes).issubset({0, 1}):
+        raise ValueError(
+            "ExponentiatedGradient binary classification requires "
+            "training labels encoded as 0 and 1. "
+            f"Observed labels: {unique_outcomes.tolist()}"
+        )
+
+    if len(unique_outcomes) < 2:
+        raise ValueError(
+            "ExponentiatedGradient cannot be fit because the "
+            "training outcome contains only one class."
+        )
+
+    unique_groups = np.unique(sensitive_train)
+
+    if len(unique_groups) < 2:
+        raise ValueError(
+            "ExponentiatedGradient requires at least two observed "
+            "protected groups. "
+            f"Observed groups: {unique_groups.tolist()}"
+        )
+
+    # ---------------------------------------------------------
+    # Fit preprocessing on training data only
+    # ---------------------------------------------------------
+    #
+    # Do not fit the preprocessor on train + validation. Fitting on
+    # training alone avoids learning scaling or encoding information
+    # from validation observations.
+    prep = build_preprocessor(
+        X_tr,
+        list(protected_cols),
+    )
+
+    X_train_transformed = prep.fit_transform(X_tr)
+    X_test_transformed = prep.transform(X_te)
+
+    if hasattr(X_train_transformed, "toarray"):
+        X_train_transformed = (
+            X_train_transformed.toarray()
+        )
+
+    if hasattr(X_test_transformed, "toarray"):
+        X_test_transformed = (
+            X_test_transformed.toarray()
+        )
+
+    X_train_transformed = np.asarray(
+        X_train_transformed,
+        dtype=float,
+    )
+
+    X_test_transformed = np.asarray(
+        X_test_transformed,
+        dtype=float,
+    )
+
+    if not np.isfinite(X_train_transformed).all():
+        bad_count = int(
+            (~np.isfinite(X_train_transformed)).sum()
+        )
+
+        raise ValueError(
+            "The transformed training matrix contains "
+            f"{bad_count} non-finite values. Add imputation to "
+            "build_preprocessor() before running reductions."
+        )
+
+    if not np.isfinite(X_test_transformed).all():
+        bad_count = int(
+            (~np.isfinite(X_test_transformed)).sum()
+        )
+
+        raise ValueError(
+            "The transformed test matrix contains "
+            f"{bad_count} non-finite values."
+        )
+
+    # ---------------------------------------------------------
+    # Construct the base learner
+    # ---------------------------------------------------------
+    reductions_params = _prepare_reductions_params(
+        model_name=model_name,
+        params=params,
+    )
+        # eps controls the allowed constraint violation. Retain the
+    # Fairlearn default unless explicitly supplied in params.
+    reductions_eps = float(
+        reductions_params.pop(
+            "reductions_eps",
+            0.01,
+        )
+    )
+
+    reductions_max_iter = int(
+        reductions_params.pop(
+            "reductions_max_iter",
+            50,
+        )
+    )
+
+    reductions_nu = reductions_params.pop(
+        "reductions_nu",
+        None,
+    )
+
+    base_estimator = build_estimator(
+        model_name,
+        reductions_params,
+    )
+
+    if not _supports_sample_weight(base_estimator):
+        additional_note = ""
+
+        if model_name == "Neural Network":
+            additional_note = (
+                " Scikit-learn added sample_weight support to "
+                "MLPClassifier in version 1.7. Upgrade "
+                "scikit-learn or use a weighted neural-network "
+                "wrapper."
+            )
+
+        raise TypeError(
+            f"{model_name} cannot be used with "
+            "ExponentiatedGradient in this environment because "
+            f"{type(base_estimator).__name__}.fit() does not "
+            f"accept sample_weight.{additional_note}"
+        )
+
+    # ---------------------------------------------------------
+    # Fit Exponentiated Gradient
+    # ---------------------------------------------------------
+    #
+
+
+    exponentiated_gradient_kwargs = {
+        "estimator": base_estimator,
+        "constraints": fairness_constraint,
+        "eps": reductions_eps,
+        "max_iter": reductions_max_iter,
+    }
+
+    if reductions_nu is not None:
+        exponentiated_gradient_kwargs["nu"] = float(
+            reductions_nu
+        )
+
+    reductions_estimator = ExponentiatedGradient(
+        **exponentiated_gradient_kwargs
+    )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*lbfgs failed to converge.*",
+        )
+
+        reductions_estimator.fit(
+            X_train_transformed,
+            y_train,
+            sensitive_features=sensitive_train,
+        )
+
+    # ---------------------------------------------------------
+    # Build a deterministic expected-mixture predictor
+    # ---------------------------------------------------------
+    reductions_predictor = ReductionsPredictor(
+        features=list(X_tr.columns),
+        protected_cols=list(protected_cols),
+        preprocessor=prep,
+        estimator=reductions_estimator,
+        threshold=0.5,
+    )
+
+    # Use the same wrapper for immediate test evaluation and for
+    # subsequent FairLogue auditing.
+    probabilities = reductions_predictor.predict_proba(
+        X_te
+    )
+
+    predictions = reductions_predictor.predict(
+        X_te
+    )
+
+    probabilities = np.asarray(
+        probabilities,
+        dtype=float,
+    ).ravel()
+
+    predictions = np.asarray(
+        predictions,
+        dtype=int,
+    ).ravel()
+
+    if len(probabilities) != len(y_test):
+        raise RuntimeError(
+            "The reductions probability vector is not aligned "
+            "with the held-out labels: "
+            f"{len(probabilities)} predictions versus "
+            f"{len(y_test)} labels."
+        )
+
+    if len(predictions) != len(y_test):
+        raise RuntimeError(
+            "The reductions hard-prediction vector is not aligned "
+            "with the held-out labels."
+        )
+
+    # ---------------------------------------------------------
+    # Capture useful Fairlearn diagnostics
+    # ---------------------------------------------------------
+    mixture_weights = getattr(
+        reductions_estimator,
+        "weights_",
+        None,
+    )
+
+    if isinstance(mixture_weights, pd.Series):
+        mixture_weights_metadata = {
+            str(key): float(value)
+            for key, value
+            in mixture_weights.items()
+            if np.isfinite(value)
+        }
+    elif mixture_weights is not None:
+        weights_array = np.asarray(
+            mixture_weights,
+            dtype=float,
+        ).ravel()
+
+        mixture_weights_metadata = {
+            str(index): float(value)
+            for index, value in enumerate(weights_array)
+            if np.isfinite(value)
+        }
+    else:
+        mixture_weights_metadata = None
+
+    n_mixture_predictors = len(
+        getattr(
+            reductions_estimator,
+            "predictors_",
+            [],
+        )
+    )
+
+    best_gap = getattr(
+        reductions_estimator,
+        "best_gap_",
+        None,
+    )
+
+    last_iter = getattr(
+        reductions_estimator,
+        "last_iter_",
+        None,
+    )
+
     fair_model = FairModel(
-        name=f"In: Reductions ({constraint})",
+        name=f"In: Reductions ({constraint_name})",
         features=list(X_tr.columns),
         protected_cols=list(protected_cols),
         predictor=reductions_predictor,
@@ -463,24 +1141,60 @@ def run_reductions_meta(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, 
         positive_label=1,
         metadata={
             "source": "FairSelect",
-            "technique": f"In:Reductions ({constraint})",
+            "technique": (
+                f"In:Reductions ({constraint_name})"
+            ),
             "model_name": model_name,
-            "model_params": params,
-            "constraint": constraint,
+            "model_params_original": dict(params or {}),
+            "model_params_reductions": reductions_params,
+            "constraint": constraint_name,
             "fairlearn": True,
             "inprocessing": "ExponentiatedGradient",
-            "base_estimator": model_name,
+            "base_estimator": type(
+                base_estimator
+            ).__name__,
+            "eps": reductions_eps,
+            "max_iter": reductions_max_iter,
+            "nu": reductions_nu,
+            "n_mixture_predictors": (
+                int(n_mixture_predictors)
+            ),
+            "mixture_weights": (
+                mixture_weights_metadata
+            ),
+            "best_gap": (
+                float(best_gap)
+                if best_gap is not None
+                else None
+            ),
+            "last_iter": (
+                int(last_iter)
+                if last_iter is not None
+                else None
+            ),
+            "prediction_mode": (
+                "deterministic expected mixture"
+            ),
+            "sklearn_version": sklearn.__version__,
         },
     )
 
     return evaluate_run(
-        f"In: Reductions ({constraint})",
-        y_te.to_numpy(),
-        p,
-        yhat,
-        A_te,
+        f"In: Reductions ({constraint_name})",
+        y_te,
+        probabilities,
+        predictions,
+        pd.Series(
+            sensitive_test,
+            index=getattr(A_te, "index", None),
+        ),
         fair_model=fair_model,
-        test_index=X_te.index,
+        test_index=list(X_te.index),
+        notes=(
+            "ExponentiatedGradient evaluated using the "
+            "deterministic weighted expected prediction across "
+            f"{n_mixture_predictors} fitted base learners."
+        ),
     )
 
 def run_baseline(model_name, params,

@@ -39,15 +39,28 @@ def build_estimator(model_name: str, params: Dict[str, Any]):
     '''
     if model_name == "Logistic Regression":
         cw = params.get("class_weight", None)
+
         if cw == "None":
             cw = None
+
+        C_value = params.get("C", 1.0)
+        if C_value is None:
+            C_value = 1.0
+
+        # New scikit-learn parameterization:
+        # l1_ratio=0.0 gives pure L2 regularization.
+        l1_ratio = params.get("l1_ratio", 0.0)
+
+        if l1_ratio is None:
+            l1_ratio = 0.0
+
         return LogisticRegression(
-            penalty=params.get("penalty", "l2"),
-            C=params.get("C", 1.0) if params.get("C", 1.0) is not None else 1.0,
+            C=float(C_value),
+            l1_ratio=float(l1_ratio),
             solver=params.get("solver", "lbfgs"),
-            max_iter=params.get("max_iter", 200) if params.get("max_iter", 200) is not None else 200,
+            max_iter=int(params.get("max_iter", 200) or 200),
             class_weight=cw,
-            random_state=params.get("random_state", None)
+            random_state=params.get("random_state", None),
         )
     if model_name == "Neural Network":
         hls = params.get("hidden_layer_sizes", None)
