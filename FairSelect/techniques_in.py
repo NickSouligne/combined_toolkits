@@ -30,128 +30,424 @@ def run_compositional_models(
     protected_cols,
     all_df_train,
     outcome_col=None,
+    min_group_train_size=5,
 ):
     """
-    Train one model per intersectional group.
+    Train a pooled fallback model and separate models for eligible
+    intersectional groups.
 
     A group-specific model is trained only when its training subset:
-      1. contains at least min_group_train_size observations; and
-      2. contains both outcome classes.
 
-    Test observations whose groups do not have a valid group-specific
-    model are evaluated using a pooled fallback model.
+    1. Has at least ``min_group_train_size`` observations.
+    2. Contains both outcome classes.
+
+    Any held-out observation whose group lacks a valid group-specific
+    model is scored using the pooled fallback model.
+
+    Parameters
+    ----------
+    model_name
+        FairSelect model name passed to build_estimator().
+
+    params
+        Hyperparameters for the estimator.
+
+    X_tr, X_va, X_te
+        Training, validation, and held-out test feature matrices.
+
+    y_tr, y_va, y_te
+        Training, validation, and test outcome labels.
+
+    A_tr, A_va, A_te
+        Training, validation, and test intersectional group labels.
+
+    protected_cols
+        Original protected-characteristic column names.
+
+    all_df_train
+        Retained for compatibility with other FairSelect runners.
+
+    outcome_col
+        Name of the original outcome column, such as "target".
+
+    min_group_train_size
+        Minimum number of training observations required before a
+        subgroup-specific model is considered.
+
+    Returns
+    -------
+    RunResult
+        FairSelect evaluation result containing the fitted FairModel.
     """
 
-    del all_df_train
+    # These inputs are retained for a consistent runner API but are
+    # not required by compositional fitting.
+    del X_va
+    del y_va
     del A_va
+    del all_df_train
 
-    min_group_train_size = 5
+    if min_group_train_size < 2:
+        raise ValueError(
+            "min_group_train_size must be at least 2. "
+            f"Received {min_group_train_size}."
+        )
 
-    if not X_tr.index.equals(y_tr.index):
-        y_tr = y_tr.reindex(X_tr.index)
+    # ---------------------------------------------------------
+    # Validate input alignment
+    # ---------------------------------------------------------
+    if len(X_tr) != len(y_tr):
+        raise ValueError(
+            "X_tr and y_tr are not aligned: "
+            f"len(X_tr)={len(X_tr)}, len(y_tr)={len(y_tr)}."
+        )
 
-    if not X_tr.index.equals(A_tr.index):
-        A_tr = A_tr.reindex(X_tr.index)
+    if len(X_tr) != len(A_tr):
+        raise ValueError(
+            "X_tr and A_tr are not aligned: "
+            f"len(X_tr)={len(X_tr)}, len(A_tr)={len(A_tr)}."
+        )
 
-    if not X_te.index.equals(y_te.index):
-        y_te = y_te.reindex(X_te.index)
+    if len(X_te) != len(y_te):
+        raise ValueError(
+            "X_te and y_te are not aligned: "
+            f"len(X_te)={len(X_te)}, len(y_te)={len(y_te)}."
+        )
 
-    if not X_te.index.equals(A_te.index):
-        A_te = A_te.reindex(X_te.index)
+    if len(X_te) != len(A_te):
+        raise ValueError(
+            "X_te and A_te are not aligned: "
+            f"len(X_te)={len(X_te)}, len(A_te)={len(A_te)}."
+        )
 
+    if len(X_tr) == 0:
+        raise ValueError(
+            "The compositional runner received an empty training set."
+        )
+
+    if len(X_te) == 0:
+        raise ValueError(
+            "The compositional runner received an empty test set."
+        )
+
+    # ---------------------------------------------------------
+    # Normalize labels and groups with explicit positional order
+    # ---------------------------------------------------------
+    y_train = np.asarray(
+        pd.Series(y_tr).astype(int),
+        dtype=int,
+    ).ravel()
+
+    y_test = np.asarray(
+        pd.Series(y_te).astype(int),
+        dtype=int,
+    ).ravel()
+
+    A_train = (
+        pd.Series(A_tr)
+        .astype(str)
+        .to_numpy()
+    )
+
+    A_test = (
+        pd.Series(A_te)
+        .astype(str)
+        .to_numpy()
+    )
+
+    observed_training_classes = np.unique(y_train)
+
+    if not set(observed_training_classes).issubset({0, 1}):
+        raise ValueError(
+            "Compositional binary classification requires labels "
+            "encoded as 0 and 1. Observed training labels: "
+            f"{observed_training_classes.tolist()}."
+        )
+
+    if len(observed_training_classes) < 2:
+        raise ValueError(
+            "The pooled compositional model cannot be trained because "
+            "the complete training set contains only one outcome class: "
+            f"{observed_training_classes.tolist()}."
+        )
+
+    # ---------------------------------------------------------
     # Fit preprocessing on training data only
+    # ---------------------------------------------------------
     prep = build_preprocessor(
         X_tr,
         protected_cols,
     )
 
-    prep.fit(X_tr)
+    X_train_transformed = prep.fit_transform(X_tr)
+    X_test_transformed = prep.transform(X_te)
 
-    Xtr_transformed = prep.transform(X_tr)
-    Xte_transformed = prep.transform(X_te)
+    # Some estimators accept sparse matrices; others do not. Preserve
+    # sparse output unless a downstream slicing operation requires an
+    # ndarray. scipy sparse matrices support positional row indexing.
+    if X_train_transformed.shape[0] != len(y_train):
+        raise RuntimeError(
+            "The transformed training matrix is not aligned with "
+            "the training labels."
+        )
 
-    # Always fit one pooled fallback model
+    if X_test_transformed.shape[0] != len(y_test):
+        raise RuntimeError(
+            "The transformed test matrix is not aligned with "
+            "the test labels."
+        )
+
+    # ---------------------------------------------------------
+    # Fit pooled fallback model
+    # ---------------------------------------------------------
     pooled_model = build_estimator(
         model_name,
         dict(params or {}),
     )
 
     pooled_model.fit(
-        Xtr_transformed,
-        y_tr.to_numpy(),
+        X_train_transformed,
+        y_train,
     )
 
-    groups = pd.Series(
-        A_tr.astype(str),
-        index=A_tr.index,
-    ).unique()
-
-    models = {}
+    # ---------------------------------------------------------
+    # Summarize group-level training coverage
+    # ---------------------------------------------------------
+    coverage_rows = []
+    group_models = {}
     skipped_groups = []
 
-    for g in groups:
-        mask = A_tr.astype(str) == str(g)
+    unique_training_groups = pd.unique(A_train)
 
-        group_indices = np.flatnonzero(
-            mask.to_numpy()
+    for group_name in unique_training_groups:
+        group_mask = A_train == str(group_name)
+        group_positions = np.flatnonzero(group_mask)
+
+        group_y = y_train[group_positions]
+
+        observed_classes, class_counts = np.unique(
+            group_y,
+            return_counts=True,
         )
 
-        group_y = y_tr.iloc[group_indices]
-        group_n = len(group_indices)
-        observed_classes = np.unique(
-            group_y.to_numpy()
-        )
+        class_count_mapping = {
+            str(int(class_label)): int(class_count)
+            for class_label, class_count in zip(
+                observed_classes,
+                class_counts,
+            )
+        }
 
-        if group_n < min_group_train_size:
-            skipped_groups.append({
-                "group": str(g),
+        coverage_record = {
+            "group": str(group_name),
+            "n_train": int(len(group_positions)),
+            "n_classes": int(len(observed_classes)),
+            "classes": observed_classes.tolist(),
+            "class_counts": class_count_mapping,
+            "n_negative": int((group_y == 0).sum()),
+            "n_positive": int((group_y == 1).sum()),
+        }
+
+        # -----------------------------------------------------
+        # Skip groups with insufficient rows
+        # -----------------------------------------------------
+        if len(group_positions) < min_group_train_size:
+            skip_record = {
+                **coverage_record,
                 "reason": "too_few_training_rows",
-                "n_train": int(group_n),
-                "classes": observed_classes.tolist(),
+            }
+
+            skipped_groups.append(skip_record)
+
+            coverage_rows.append({
+                **coverage_record,
+                "status": "skipped",
+                "reason": "too_few_training_rows",
             })
+
+            print(
+                "[Compositional] Using pooled fallback for "
+                f"group={group_name!r}: "
+                f"n_train={len(group_positions)} is below "
+                f"min_group_train_size={min_group_train_size}."
+            )
+
             continue
 
+        # -----------------------------------------------------
+        # Skip groups with only one outcome class
+        # -----------------------------------------------------
         if len(observed_classes) < 2:
-            skipped_groups.append({
-                "group": str(g),
+            skip_record = {
+                **coverage_record,
                 "reason": "single_training_class",
-                "n_train": int(group_n),
-                "classes": observed_classes.tolist(),
+            }
+
+            skipped_groups.append(skip_record)
+
+            coverage_rows.append({
+                **coverage_record,
+                "status": "skipped",
+                "reason": "single_training_class",
             })
+
+            print(
+                "[Compositional] Using pooled fallback for "
+                f"group={group_name!r}: "
+                f"classes={observed_classes.tolist()}, "
+                f"class_counts={class_count_mapping}."
+            )
+
             continue
 
+        # -----------------------------------------------------
+        # Fit subgroup-specific model
+        # -----------------------------------------------------
         group_model = build_estimator(
             model_name,
             dict(params or {}),
         )
 
-        group_model.fit(
-            Xtr_transformed[group_indices],
-            group_y.to_numpy(),
-        )
+        try:
+            group_model.fit(
+                X_train_transformed[group_positions],
+                group_y,
+            )
 
-        models[str(g)] = group_model
+        except ValueError as exc:
+            error_message = str(exc).lower()
 
-    # Predict test probabilities
-    probabilities = np.zeros(
-        len(X_te),
+            # Defensive protection in case an estimator applies
+            # internal row filtering or rejects the subgroup despite
+            # the explicit two-class check.
+            single_class_error = (
+                "at least 2 classes" in error_message
+                or "at least two classes" in error_message
+                or "only one class" in error_message
+                or "contains only one class" in error_message
+            )
+
+            if single_class_error:
+                skip_record = {
+                    **coverage_record,
+                    "reason": "estimator_rejected_group_classes",
+                    "error": str(exc),
+                }
+
+                skipped_groups.append(skip_record)
+
+                coverage_rows.append({
+                    **coverage_record,
+                    "status": "skipped",
+                    "reason": "estimator_rejected_group_classes",
+                    "error": str(exc),
+                })
+
+                print(
+                    "[Compositional] Estimator rejected "
+                    f"group={group_name!r}; using pooled fallback. "
+                    f"Error: {exc}"
+                )
+
+                continue
+
+            raise
+
+        group_models[str(group_name)] = group_model
+
+        coverage_rows.append({
+            **coverage_record,
+            "status": "trained",
+            "reason": None,
+        })
+
+    coverage_df = pd.DataFrame(coverage_rows)
+
+    # ---------------------------------------------------------
+    # Predict held-out observations
+    # ---------------------------------------------------------
+    probabilities = np.full(
+        shape=len(X_te),
+        fill_value=np.nan,
         dtype=float,
     )
 
-    A_test_string = A_te.astype(str).to_numpy()
+    prediction_source = np.empty(
+        len(X_te),
+        dtype=object,
+    )
 
-    for group_name in np.unique(A_test_string):
-        test_mask = A_test_string == group_name
-        test_positions = np.flatnonzero(test_mask)
+    unique_test_groups = pd.unique(A_test)
 
-        selected_model = models.get(
-            str(group_name),
-            pooled_model,
+    for group_name in unique_test_groups:
+        test_positions = np.flatnonzero(
+            A_test == str(group_name)
         )
 
-        probabilities[test_positions] = to_proba(
+        if len(test_positions) == 0:
+            continue
+
+        selected_model = group_models.get(
+            str(group_name)
+        )
+
+        if selected_model is None:
+            selected_model = pooled_model
+            source_name = "pooled_fallback"
+        else:
+            source_name = "group_specific"
+
+        group_probabilities = to_proba(
             selected_model,
-            Xte_transformed[test_positions],
+            X_test_transformed[test_positions],
+        )
+
+        group_probabilities = np.asarray(
+            group_probabilities,
+            dtype=float,
+        )
+
+        if group_probabilities.ndim == 2:
+            if group_probabilities.shape[1] >= 2:
+                group_probabilities = (
+                    group_probabilities[:, 1]
+                )
+            else:
+                group_probabilities = (
+                    group_probabilities[:, 0]
+                )
+
+        group_probabilities = (
+            group_probabilities.ravel()
+        )
+
+        if len(group_probabilities) != len(test_positions):
+            raise RuntimeError(
+                "A compositional subgroup model returned an "
+                "unexpected number of probabilities for "
+                f"group={group_name!r}: "
+                f"expected {len(test_positions)}, "
+                f"received {len(group_probabilities)}."
+            )
+
+        probabilities[test_positions] = (
+            group_probabilities
+        )
+
+        prediction_source[test_positions] = (
+            source_name
+        )
+
+    if np.isnan(probabilities).any():
+        missing_positions = np.flatnonzero(
+            np.isnan(probabilities)
+        )
+
+        raise RuntimeError(
+            "Compositional prediction did not assign probabilities "
+            f"to {len(missing_positions)} test observations. "
+            f"First missing positions: "
+            f"{missing_positions[:20].tolist()}."
         )
 
     probabilities = np.clip(
@@ -160,43 +456,93 @@ def run_compositional_models(
         1.0,
     )
 
+    threshold = 0.5
+
     predictions = (
-        probabilities >= 0.5
+        probabilities >= threshold
     ).astype(int)
 
-    predictor = GroupModelPredictor(
+    # ---------------------------------------------------------
+    # Build FairModel-compatible compositional predictor
+    # ---------------------------------------------------------
+    compositional_predictor = GroupModelPredictor(
         features=list(X_tr.columns),
         protected_cols=list(protected_cols),
         preprocessor=prep,
-        group_models=models,
+        group_models=group_models,
         fallback_model=pooled_model,
-        threshold=0.5,
+        threshold=threshold,
     )
 
     fair_model = make_predictor_fair_model(
         name="In: Compositional (per-group)",
         features=list(X_tr.columns),
         protected_cols=list(protected_cols),
-        predictor=predictor,
-        threshold=0.5,
+        predictor=compositional_predictor,
+        threshold=threshold,
         outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "In:Compositional per-group",
             "model_name": model_name,
             "model_params": dict(params or {}),
-            "n_group_models": len(models),
-            "trained_groups": sorted(models.keys()),
+            "threshold": threshold,
+            "min_group_train_size": int(
+                min_group_train_size
+            ),
+            "n_training_groups": int(
+                len(unique_training_groups)
+            ),
+            "n_group_models": int(
+                len(group_models)
+            ),
+            "trained_groups": sorted(
+                group_models.keys()
+            ),
+            "n_skipped_groups": int(
+                len(skipped_groups)
+            ),
             "skipped_groups": skipped_groups,
+            "group_training_coverage": (
+                coverage_df.to_dict(
+                    orient="records"
+                )
+            ),
             "fallback_model": "pooled",
-            "min_group_train_size": min_group_train_size,
+            "prediction_strategy": (
+                "group-specific model when eligible; "
+                "otherwise pooled fallback"
+            ),
         },
     )
 
+    # ---------------------------------------------------------
+    # Add held-out prediction-source information to metadata
+    # ---------------------------------------------------------
+    prediction_source_counts = (
+        pd.Series(prediction_source)
+        .value_counts(dropna=False)
+        .to_dict()
+    )
+
+    fair_model.metadata[
+        "test_prediction_source_counts"
+    ] = {
+        str(key): int(value)
+        for key, value in (
+            prediction_source_counts.items()
+        )
+    }
+
     notes = (
-        f"Trained {len(models)} group-specific models. "
-        f"Skipped {len(skipped_groups)} groups; observations from "
-        "those groups use the pooled fallback model."
+        f"Trained {len(group_models)} group-specific models from "
+        f"{len(unique_training_groups)} observed training groups. "
+        f"{len(skipped_groups)} groups were assigned to the pooled "
+        "fallback model. On the held-out set, "
+        f"{int((prediction_source == 'group_specific').sum())} "
+        "observations used a group-specific model and "
+        f"{int((prediction_source == 'pooled_fallback').sum())} "
+        "used the pooled fallback model."
     )
 
     return evaluate_run(
