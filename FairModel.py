@@ -6,6 +6,14 @@
 import numpy as np
 import pandas as pd
 
+from copy import deepcopy
+from typing import Any, Dict, Optional
+
+from sklearn.base import clone
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neural_network import MLPClassifier
+from sklearn.svm import SVC
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -115,38 +123,102 @@ class FairModel:
 
     def transform(self, df):
         """
-        Convert a raw dataframe into the exact feature matrix expected by the fitted model.
+        Convert a raw dataframe into the feature matrix expected by the model.
         """
+        if self.features is None:
+            raise ValueError("FairModel.features has not been configured.")
 
-        missing = [c for c in self.features if c not in df.columns]
+        missing = [
+            col for col in self.features
+            if col not in df.columns
+        ]
         if missing:
-            raise ValueError(f"Missing required feature columns: {missing}")
+            raise ValueError(
+                f"Missing required feature columns: {missing}"
+            )
 
         X = df[self.features].copy()
 
         if self.preprocessor is not None:
-            return self.preprocessor.transform(X)
+            X = self.preprocessor.transform(X)
+
+        dense_output = self.metadata.get("dense_output", False)
+
+        if dense_output and hasattr(X, "toarray"):
+            X = X.toarray()
 
         return X
 
     def predict_proba(self, df):
+        """
+        Return P(Y=positive_label) as a one-dimensional array.
+        """
         if self.predictor is not None:
-            return self.predictor.predict_proba(df)
+            probabilities = self.predictor.predict_proba(df)
+        else:
+            if self.estimator is None:
+                raise ValueError(
+                    "No predictor or estimator has been assigned."
+                )
 
-        if self.estimator is None:
-            raise ValueError("No predictor or estimator has been assigned.")
+            X = self.transform(df)
 
-        X = self.transform(df)
+            if hasattr(self.estimator, "predict_proba"):
+                probabilities = self.estimator.predict_proba(X)
 
-        if hasattr(self.estimator, "predict_proba"):
-            proba = self.estimator.predict_proba(X)
-            return proba[:, 1] if proba.shape[1] == 2 else proba.max(axis=1)
+            elif hasattr(self.estimator, "decision_function"):
+                scores = np.asarray(
+                    self.estimator.decision_function(X),
+                    dtype=float,
+                )
 
-        if hasattr(self.estimator, "decision_function"):
-            scores = self.estimator.decision_function(X).astype(float)
-            return (scores - scores.min()) / (scores.max() - scores.min() + 1e-12)
+                # Logistic transformation is preferable to min-max scaling,
+                # because min-max results depend on the current prediction batch.
+                if scores.ndim == 1:
+                    return 1.0 / (1.0 + np.exp(-scores))
 
-        return self.estimator.predict(X).astype(float)
+                probabilities = np.exp(
+                    scores - scores.max(axis=1, keepdims=True)
+                )
+                probabilities /= probabilities.sum(
+                    axis=1,
+                    keepdims=True,
+                )
+
+            else:
+                return np.asarray(
+                    self.estimator.predict(X),
+                    dtype=float,
+                )
+
+        probabilities = np.asarray(probabilities)
+
+        if probabilities.ndim == 1:
+            return probabilities.astype(float)
+
+        if probabilities.shape[1] != 2:
+            raise ValueError(
+                "FairLogue currently expects a binary outcome, but "
+                f"predict_proba returned shape {probabilities.shape}."
+            )
+
+        classes = getattr(
+            self.estimator,
+            "classes_",
+            np.array([0, 1]),
+        )
+
+        positive_matches = np.where(
+            np.asarray(classes) == self.positive_label
+        )[0]
+
+        positive_index = (
+            int(positive_matches[0])
+            if len(positive_matches)
+            else 1
+        )
+
+        return probabilities[:, positive_index].astype(float)
 
     def predict(self, df):
         if self.predictor is not None:
@@ -154,3 +226,148 @@ class FairModel:
 
         proba = self.predict_proba(df)
         return (proba >= self.threshold).astype(int)
+    
+    @staticmethod
+    def build_preprocessor(
+        df: pd.DataFrame,
+        features,
+        *,
+        dense_output: bool = False,
+    ):
+        """
+        Build preprocessing from the training dataframe only.
+        """
+        feature_df = df[list(features)]
+
+        numeric_cols = feature_df.select_dtypes(
+            include=["number", "bool"]
+        ).columns.tolist()
+
+        categorical_cols = [
+            col for col in features
+            if col not in numeric_cols
+        ]
+
+        numeric_pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="median")),
+                (
+                    "scaler",
+                    StandardScaler(with_mean=dense_output),
+                ),
+            ]
+        )
+
+        try:
+            encoder = OneHotEncoder(
+                handle_unknown="ignore",
+                sparse_output=not dense_output,
+            )
+        except TypeError:
+            encoder = OneHotEncoder(
+                handle_unknown="ignore",
+                sparse=not dense_output,
+            )
+
+        categorical_pipeline = Pipeline(
+            steps=[
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                ("encoder", encoder),
+            ]
+        )
+
+        return ColumnTransformer(
+            transformers=[
+                ("numeric", numeric_pipeline, numeric_cols),
+                ("categorical", categorical_pipeline, categorical_cols),
+            ],
+            remainder="drop",
+            sparse_threshold=0.0 if dense_output else 0.3,
+        )
+    
+    @classmethod
+    def fit_from_dataframe(
+        cls,
+        train_df: pd.DataFrame,
+        *,
+        name: str,
+        outcome_col: str,
+        features,
+        protected_cols,
+        model_type: str,
+        model_params: Optional[Dict[str, Any]] = None,
+        positive_label: Any = 1,
+        threshold: float = 0.5,
+        random_state: int = 42,
+    ):
+        """
+        Fit a FairModel using only train_df.
+
+        This method is safe to call independently inside each CV fold.
+        """
+        features = [
+            col for col in features
+            if col != outcome_col
+        ]
+
+        missing = [
+            col for col in features
+            if col not in train_df.columns
+        ]
+        if missing:
+            raise ValueError(
+                f"Training data is missing feature columns: {missing}"
+            )
+
+        mt = model_type.lower().strip()
+
+        # MLP requires dense input. The tree models can also accept dense input,
+        # but do not require it.
+        dense_output = mt in {
+            "nn",
+            "mlp",
+            "neural",
+            "neural_network",
+        }
+
+        preprocessor = cls.build_preprocessor(
+            train_df,
+            features,
+            dense_output=dense_output,
+        )
+
+        estimator = cls.build_estimator(
+            model_type=model_type,
+            model_params=model_params,
+            random_state=random_state,
+        )
+
+        X_train = train_df[features].copy()
+        y_train = (
+            train_df[outcome_col].to_numpy() == positive_label
+        ).astype(int)
+
+        X_train_transformed = preprocessor.fit_transform(X_train)
+
+        if hasattr(X_train_transformed, "toarray") and dense_output:
+            X_train_transformed = X_train_transformed.toarray()
+
+        estimator.fit(X_train_transformed, y_train)
+
+        return cls(
+            name=name,
+            features=features,
+            protected_cols=protected_cols,
+            preprocessor=preprocessor,
+            estimator=estimator,
+            threshold=threshold,
+            outcome_col=outcome_col,
+            positive_label=positive_label,
+            model_type=model_type,
+            model_params=model_params,
+            random_state=random_state,
+            metadata={
+                "n_train": len(train_df),
+                "dense_output": dense_output,
+            },
+        )

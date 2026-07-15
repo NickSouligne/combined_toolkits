@@ -9,6 +9,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import FunctionTransformer, Pipeline
+from FairModel import FairModel
 from .containers import FairnessResults, GroupRates
 from .plots import (
     _plot_bar,
@@ -343,26 +344,26 @@ def cross_validate_intersectional_fairness(
 
 
 def evaluate_intersectional_fairness(
-    df: pd.DataFrame,
-    outcome: str,
-    protected_1: str,
-    protected_2: str,
-    features: Optional[List[str]] = None,
-    model_type: str = "logreg", #Default to logistic regression, but can specify any supported model type (e.g. "lgbm", "rf", "nn")
-    model_params: Optional[Dict[str, Any]] = None,
-    test_size: float = 0.3,
-    random_state: int = 42, #Default random state for reproducibility; can be set to None for non-deterministic splits
-    positive_label: Any = 1,
-    threshold: float = 0.5, #Predict positive if proba ≥ this
-    make_plots: bool = True,
-    train_df: Optional[pd.DataFrame] = None, #If provided, use this as the training set instead of splitting from df
-    test_df: Optional[pd.DataFrame] = None, #If provided, use this as the test set instead of splitting from df (must provide both train_df and test_df or neither)
-    *,
-    return_intermediates = False,
-    return_non_intersectional: bool = False,
-    min_group_size: int = 0,           #drop groups with n < this
-    require_class_balance: bool = False #require ≥1 pos & ≥1 neg per group
-) -> Tuple[FairnessResults, Dict[str, plt.Figure]]:
+        df: pd.DataFrame,
+        outcome: str,
+        protected_1: str,
+        protected_2: str,
+        features: Optional[List[str]] = None,
+        model_type: str = "logreg",
+        model_params: Optional[Dict[str, Any]] = None,
+        fair_model=None,
+        test_size: float = 0.3,
+        random_state: int = 42,
+        positive_label: Any = 1,
+        threshold: Optional[float] = None,
+        make_plots: bool = True,
+        train_df: Optional[pd.DataFrame] = None,
+        test_df: Optional[pd.DataFrame] = None,
+        return_intermediates: bool = False,
+        return_non_intersectional: bool = False,
+        min_group_size: int = 0,
+        require_class_balance: bool = False,
+    ):-> Tuple[FairnessResults, Dict[str, plt.Figure]]:
     
     #Check that protected characteristics and outcome are in data
     for col in (outcome, protected_1, protected_2):
@@ -411,7 +412,7 @@ def evaluate_intersectional_fairness(
             return float(s.max() - s.min()) if not s.empty else float("nan")
 
         return FairnessResults(
-            model=mt,
+            model=fitted_fair_model.model_type,
             groups=[GroupRates(**row) for row in df_for_metrics_local.to_dict(orient="records")],
             demographic_parity_gap=_gap(df_for_metrics_local["positive_rate"]),
             equalized_odds_gap_tpr=_gap(df_for_metrics_local["tpr"]),
@@ -463,84 +464,255 @@ def evaluate_intersectional_fairness(
     if not feature_cols:
         raise ValueError("No usable feature columns remain after filtering and dropping all-NaN columns.")
 
-    #Check feature types
-    numeric_cols = X.select_dtypes(include=[np.number, "bool"]).columns.tolist()
-    categorical_cols = [c for c in feature_cols if c not in numeric_cols]
 
-    #preprocessing: imputer + scaler for numeric, imputer + OHE for categorical
-    #sparse output for tree-based models, dense for others (esp. neural nets)
-    num_pipe_sparse = Pipeline([
-        ("impute", SimpleImputer(strategy="median")),
-        ("scale", StandardScaler(with_mean=False)),
-    ])
-    cat_pipe_sparse = Pipeline([
-        ("impute", SimpleImputer(strategy="most_frequent")),
-        ("ohe", _make_ohe(dense=False)),
-    ])
-    pre_sparse = ColumnTransformer([
-        ("num", num_pipe_sparse, numeric_cols),
-        ("cat", cat_pipe_sparse, categorical_cols),
-    ], remainder="drop", sparse_threshold=0.3)
-
-    num_pipe_dense = Pipeline([
-        ("impute", SimpleImputer(strategy="median")),
-        ("scale", StandardScaler(with_mean=True)),
-    ])
-    cat_pipe_dense = Pipeline([
-        ("impute", SimpleImputer(strategy="most_frequent")),
-        ("ohe", _make_ohe(dense=True)),
-    ])
-    pre_dense = ColumnTransformer([
-        ("num", num_pipe_dense, numeric_cols),
-        ("cat", cat_pipe_dense, categorical_cols),
-    ], remainder="drop", sparse_threshold=1.0)
-
-    #Get the model type and parameters
-    clf = _get_model(model_type, model_params)
-    mt = model_type.lower()
-    if mt in ("nn", "mlp", "neural", "neural_network"):
-        densify = FunctionTransformer(lambda A: A.toarray() if hasattr(A, "toarray") else A, accept_sparse=True)
-        pipe = Pipeline([("prep", pre_dense), ("densify", densify), ("model", clf)])
-    else:
-        pipe = Pipeline([("prep", pre_sparse), ("model", clf)])
 
     p1 = df[protected_1].astype(str).values
     p2 = df[protected_2].astype(str).values
 
-    #If user provided the train and test splits directly we use those here
+    # ---------------------------------------------------------
+    # Build or validate the train/test dataframes
+    # ---------------------------------------------------------
+
     if (train_df is None) ^ (test_df is None):
-        raise ValueError("Provide both train_df and test_df, or neither.")
-
-    if train_df is not None and test_df is not None:
-        #Rebuild data from the provided splits to avoid index mismatch
-        def _build_arrays(d: pd.DataFrame):
-            y_local = (d[outcome].values == positive_label).astype(int)
-            inter_local = (d[protected_1].astype(str) + "|" + d[protected_2].astype(str)).values
-
-            if features is None:
-                X_local = d.drop(columns=[outcome, protected_1, protected_2])
-            else:
-                feat_cols = [c for c in features if c not in (outcome, protected_1, protected_2)]
-                X_local = d[feat_cols].copy()
-
-            p1_local = d[protected_1].astype(str).values
-            p2_local = d[protected_2].astype(str).values
-            return X_local, y_local, inter_local, p1_local, p2_local
-
-        X_train, y_train, g_train, p1_train, p2_train = _build_arrays(train_df)
-        X_test,  y_test,  g_test,  p1_test,  p2_test  = _build_arrays(test_df)
-
-    else: #Otherwise we split from the provided df
-        X_train, X_test, y_train, y_test, g_train, g_test, p1_train, p1_test, p2_train, p2_test = train_test_split(
-            X, y, inter, p1, p2,
-            test_size=test_size, random_state=random_state, stratify=y
+        raise ValueError(
+            "Provide both train_df and test_df, or neither."
         )
 
-    pipe.fit(X_train, y_train)
+    if train_df is not None and test_df is not None:
+        # Use the caller-provided split.
+        #
+        # Make copies so that later modifications inside this function
+        # do not alter the caller's original dataframes.
+        train_eval_df = train_df.copy()
+        test_eval_df = test_df.copy()
 
-    #Predict on test
-    proba = _as_prob(pipe, X_test)
-    y_hat = (proba >= threshold).astype(int)
+    else:
+        # Split row indices rather than splitting preprocessed X arrays.
+        #
+        # This preserves the raw columns needed by FairModel, including:
+        #   - model features
+        #   - outcome
+        #   - protected characteristics
+        train_indices, test_indices = train_test_split(
+            np.arange(len(df)),
+            test_size=test_size,
+            random_state=random_state,
+            stratify=y,
+        )
+
+        train_eval_df = (
+            df.iloc[train_indices]
+            .copy()
+            .reset_index(drop=True)
+        )
+
+        test_eval_df = (
+            df.iloc[test_indices]
+            .copy()
+            .reset_index(drop=True)
+        )
+    
+    # ---------------------------------------------------------
+    # Validate required columns in both datasets
+    # ---------------------------------------------------------
+
+    required_columns = {
+        outcome,
+        protected_1,
+        protected_2,
+        *feature_cols,
+    }
+
+    missing_train_columns = sorted(
+        required_columns.difference(train_eval_df.columns)
+    )
+
+    missing_test_columns = sorted(
+        required_columns.difference(test_eval_df.columns)
+    )
+
+    if missing_train_columns:
+        raise KeyError(
+            "The training dataframe is missing required columns: "
+            f"{missing_train_columns}"
+        )
+
+    if missing_test_columns:
+        raise KeyError(
+            "The test dataframe is missing required columns: "
+            f"{missing_test_columns}"
+        )
+
+    # ---------------------------------------------------------
+    # Remove unusable features based on training data only
+    # ---------------------------------------------------------
+
+    train_all_nan_cols = [
+        col
+        for col in feature_cols
+        if train_eval_df[col].isna().all()
+    ]
+
+    if train_all_nan_cols:
+        print(
+            "Dropping feature columns that are entirely missing "
+            f"in the training data: {train_all_nan_cols}"
+        )
+
+        feature_cols = [
+            col
+            for col in feature_cols
+            if col not in train_all_nan_cols
+        ]
+
+    if not feature_cols:
+        raise ValueError(
+            "No usable feature columns remain in the training data."
+        )
+
+    # ---------------------------------------------------------
+    # Create or reuse the FairModel
+    # ---------------------------------------------------------
+
+    if fair_model is None:
+        # No model was supplied, so FairLogue trains one using
+        # only the training dataframe.
+        fitted_fair_model = FairModel.fit_from_dataframe(
+            train_df=train_eval_df,
+            name=(
+                "fairlogue_component1_"
+                f"{model_type.lower()}"
+            ),
+            outcome_col=outcome,
+            features=feature_cols,
+            protected_cols=[
+                protected_1,
+                protected_2,
+            ],
+            model_type=model_type,
+            model_params=model_params,
+            positive_label=positive_label,
+            threshold=threshold,
+            random_state=random_state,
+        )
+
+    else:
+        # A fitted FairModel was supplied, usually from FairSelect.
+        # Do not call fit again.
+        fitted_fair_model = fair_model
+
+        if not isinstance(fitted_fair_model, FairModel):
+            raise TypeError(
+                "fair_model must be an instance of FairModel."
+            )
+
+        if fitted_fair_model.features is None:
+            raise ValueError(
+                "The supplied FairModel does not define its "
+                "'features' attribute."
+            )
+
+        missing_model_features = [
+            col
+            for col in fitted_fair_model.features
+            if col not in test_eval_df.columns
+        ]
+
+        if missing_model_features:
+            raise KeyError(
+                "The test dataframe is missing features required "
+                "by the supplied FairModel: "
+                f"{missing_model_features}"
+            )
+    
+    # ---------------------------------------------------------
+    # Create test labels and protected-group arrays
+    # ---------------------------------------------------------
+
+    y_test = (
+        test_eval_df[outcome].to_numpy()
+        == positive_label
+    ).astype(int)
+
+    g_test = (
+        test_eval_df[protected_1].astype(str)
+        + "|"
+        + test_eval_df[protected_2].astype(str)
+    ).to_numpy()
+
+    p1_test = (
+        test_eval_df[protected_1]
+        .astype(str)
+        .to_numpy()
+    )
+
+    p2_test = (
+        test_eval_df[protected_2]
+        .astype(str)
+        .to_numpy()
+    )
+
+    # These are retained for compatibility and possible
+    # diagnostic output, even though they are not currently
+    # used in the fairness calculations.
+    y_train = (
+        train_eval_df[outcome].to_numpy()
+        == positive_label
+    ).astype(int)
+
+    g_train = (
+        train_eval_df[protected_1].astype(str)
+        + "|"
+        + train_eval_df[protected_2].astype(str)
+    ).to_numpy()
+
+    p1_train = (
+        train_eval_df[protected_1]
+        .astype(str)
+        .to_numpy()
+    )
+
+    p2_train = (
+        train_eval_df[protected_2]
+        .astype(str)
+        .to_numpy()
+    )
+
+    # ---------------------------------------------------------
+    # Predict using the FairModel interface
+    # ---------------------------------------------------------
+
+    proba = np.asarray(
+        fitted_fair_model.predict_proba(test_eval_df),
+        dtype=float,
+    ).reshape(-1)
+
+    if len(proba) != len(test_eval_df):
+        raise ValueError(
+            "FairModel.predict_proba() returned "
+            f"{len(proba)} scores for "
+            f"{len(test_eval_df)} test observations."
+        )
+
+    if not np.all(np.isfinite(proba)):
+        bad_count = int(
+            np.sum(~np.isfinite(proba))
+        )
+
+        raise ValueError(
+            "FairModel.predict_proba() returned "
+            f"{bad_count} non-finite scores."
+        )
+
+    decision_threshold = (
+        float(threshold)
+        if threshold is not None
+        else float(fitted_fair_model.threshold)
+    )
+
+    y_hat = (
+        proba >= decision_threshold
+    ).astype(int)
 
     try:
         auroc = roc_auc_score(y_test, proba)
@@ -665,17 +837,28 @@ def evaluate_intersectional_fairness(
 
         
     if return_intermediates:
-       intermediates = {
+        intermediates = {
             "y_test": y_test,
             "y_hat": y_hat,
             "groups_test": g_test,
+            "protected_1_test": p1_test,
+            "protected_2_test": p2_test,
             "proba": proba,
-            "model_metrics": {         
+            "fair_model": fitted_fair_model,
+            "model_metrics": {
                 "accuracy": accuracy,
                 "auroc": auroc,
-                "threshold": float(threshold),
-                "test_size": float(test_size),
-                "model_type": mt,
+                "threshold": decision_threshold,
+                "test_size": (
+                    len(test_eval_df)
+                    / (
+                        len(train_eval_df)
+                        + len(test_eval_df)
+                    )
+                ),
+                "model_type": (
+                    fitted_fair_model.model_type
+                ),
             },
             "non_intersectional": non_intersectional,
         }
