@@ -82,6 +82,9 @@ class PipelineConfig:
     min_group_size: int = 20
     require_outcome_coverage: bool = True
     filter_small_groups: bool = True
+    train_index: list | None = None
+    validation_index: list | None = None
+    test_index: list | None = None
 
     test_size: float = 0.25
     val_size: float = 0.2
@@ -167,16 +170,107 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
                 "Lower min_group_size or disable require_outcome_coverage."
             )
 
-    # Prepare data & splits (same call pattern as GUI). :contentReference[oaicite:4]{index=4}
-    X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te = split_data(
-        df[[*features, *protected, cfg.target]],
-        cfg.target,
-        protected,
-        features,
-        test_size=cfg.test_size,
-        val_size=cfg.val_size,
-        random_state=cfg.random_state,
+    # ---------------------------------------------------------
+    # Create or apply the train/validation/test split
+    # ---------------------------------------------------------
+
+    supplied_splits = [
+        cfg.train_index,
+        cfg.validation_index,
+        cfg.test_index,
+    ]
+
+    n_supplied = sum(
+        split_index is not None
+        for split_index in supplied_splits
     )
+
+    if n_supplied not in {0, 3}:
+        raise ValueError(
+            "External split indices must be supplied together. "
+            "Provide train_index, validation_index, and test_index, "
+            "or leave all three as None."
+        )
+
+    if n_supplied == 3:
+        train_index = list(cfg.train_index)
+        validation_index = list(
+            cfg.validation_index
+        )
+        test_index = list(cfg.test_index)
+
+        # Verify that all supplied indices exist in the filtered cohort.
+        all_requested_indices = (
+            train_index
+            + validation_index
+            + test_index
+        )
+
+        missing_indices = [
+            index
+            for index in all_requested_indices
+            if index not in X.index
+        ]
+
+        if missing_indices:
+            raise ValueError(
+                f"{len(missing_indices)} externally supplied split "
+                "indices were not found in the filtered FairSelect "
+                f"cohort. First missing indices: "
+                f"{missing_indices[:20]}"
+            )
+
+        # Verify that the splits do not overlap.
+        train_set = set(train_index)
+        validation_set = set(validation_index)
+        test_set = set(test_index)
+
+        if train_set & validation_set:
+            raise ValueError(
+                "train_index and validation_index overlap."
+            )
+
+        if train_set & test_set:
+            raise ValueError(
+                "train_index and test_index overlap."
+            )
+
+        if validation_set & test_set:
+            raise ValueError(
+                "validation_index and test_index overlap."
+            )
+
+        X_tr = X.loc[train_index].copy()
+        X_va = X.loc[validation_index].copy()
+        X_te = X.loc[test_index].copy()
+
+        y_tr = y.loc[train_index].copy()
+        y_va = y.loc[validation_index].copy()
+        y_te = y.loc[test_index].copy()
+
+        A_tr = A.loc[train_index].copy()
+        A_va = A.loc[validation_index].copy()
+        A_te = A.loc[test_index].copy()
+
+    else:
+        (
+            X_tr,
+            X_va,
+            X_te,
+            y_tr,
+            y_va,
+            y_te,
+            A_tr,
+            A_va,
+            A_te,
+        ) = split_data(
+            X,
+            y,
+            A,
+            test_size=cfg.test_size,
+            val_size=cfg.val_size,
+            random_state=cfg.random_state,
+        )
 
     # Keep full train (GUI does train+val concat). :contentReference[oaicite:5]{index=5}
     all_df_train = pd.concat([X_tr, X_va], axis=0)
@@ -251,6 +345,18 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
             outcome_col=cfg.target
         )
         results.append(combined_rr)
+    
+    for result in results:
+        if getattr(result, "test_index", None) is None:
+            result.test_index = list(
+                X_te.index
+            )
+
+        if getattr(result, "y_test", None) is None:
+            result.y_test = y_te.copy()
+
+        if getattr(result, "A_test", None) is None:
+            result.A_test = A_te.copy()
     
     for r in results:
         if filter_note:

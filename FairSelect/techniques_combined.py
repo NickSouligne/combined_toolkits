@@ -171,53 +171,431 @@ def run_combined_pipeline(model_name, params,
 
         #Compositional training: one model per group, fallback to pooled
         elif choice == "In:Compositional per-group":
-            #Train one model per group (on non-SMOTE pipeline if SMOTE selected)
-            #If SMOTE was selected, we ignore it here (per-group SMOTE is messy) and use standard pipeline. (TODO: Build out SMOTE based per-group function)
-            
-            #Transform datasets with standard preprocessor
+            """
+            Train one model per eligible intersectional group.
+
+            Groups that are too small or contain only one outcome class use a
+            single pooled fallback model. Any sample weights produced by an
+            earlier preprocessing step, such as outcome-group reweighting, are
+            retained for both pooled and group-specific fitting.
+            """
+
+            min_group_train_size = 5
+
+            # ---------------------------------------------------------
+            # Transform train, validation, and test data
+            # ---------------------------------------------------------
             Xtr_t = prep.transform(Xtr)
-            Xte_t = prep.transform(Xte)
             Xva_t = prep.transform(Xva)
-            
-            #Find unique groups
-            groups = pd.Series(Atr).unique()
+            Xte_t = prep.transform(Xte)
+
+            ytr_array = np.asarray(
+                ytr,
+                dtype=int,
+            ).ravel()
+
+            Atr_array = (
+                pd.Series(Atr)
+                .astype(str)
+                .to_numpy()
+            )
+
+            Ava_array = (
+                pd.Series(Ava)
+                .astype(str)
+                .to_numpy()
+            )
+
+            Ate_array = (
+                pd.Series(Ate)
+                .astype(str)
+                .to_numpy()
+            )
+
+            if len(Xtr_t) != len(ytr_array):
+                raise ValueError(
+                    "Compositional training data are misaligned: "
+                    f"Xtr_t has {len(Xtr_t)} rows but ytr has "
+                    f"{len(ytr_array)} rows."
+                )
+
+            if len(Atr_array) != len(ytr_array):
+                raise ValueError(
+                    "Compositional protected-group labels are misaligned: "
+                    f"Atr has {len(Atr_array)} rows but ytr has "
+                    f"{len(ytr_array)} rows."
+                )
+
+            if np.unique(ytr_array).size < 2:
+                raise ValueError(
+                    "The pooled compositional model cannot be trained because "
+                    "the full training set contains only one outcome class."
+                )
+
+            # ---------------------------------------------------------
+            # Normalize optional sample weights
+            # ---------------------------------------------------------
+            if sample_weight is None:
+                training_weights = None
+            else:
+                training_weights = np.asarray(
+                    sample_weight,
+                    dtype=float,
+                ).ravel()
+
+                if len(training_weights) != len(ytr_array):
+                    raise ValueError(
+                        "Compositional sample weights are misaligned: "
+                        f"received {len(training_weights)} weights for "
+                        f"{len(ytr_array)} training observations."
+                    )
+
+            # ---------------------------------------------------------
+            # Fit one pooled fallback model once
+            # ---------------------------------------------------------
+            #
+            # Do not refit this model inside the test prediction loop.
+            pooled = build_estimator(
+                model_name,
+                dict(params or {}),
+            )
+
+            fit_with_optional_sample_weight(
+                pooled,
+                Xtr_t,
+                ytr_array,
+                sample_weight=training_weights,
+            )
+
+            # ---------------------------------------------------------
+            # Fit eligible group-specific models
+            # ---------------------------------------------------------
             models = {}
+            compositional_group_summary = []
+            skipped_compositional_groups = []
 
-            #Train per-group models
-            for g in groups:
-                #Boolean mask to select each group
-                m = (Atr == g).to_numpy()
-                #Skip groups with less than 5 samples to avoid extreme overfitting (number arbitrary, may need to revisit)
-                if m.sum() < 5:
+            for group_name in pd.unique(Atr_array):
+                group_positions = np.flatnonzero(
+                    Atr_array == str(group_name)
+                )
+
+                group_y = ytr_array[group_positions]
+
+                observed_classes, class_counts = np.unique(
+                    group_y,
+                    return_counts=True,
+                )
+
+                class_count_dict = {
+                    str(int(class_label)): int(class_count)
+                    for class_label, class_count in zip(
+                        observed_classes,
+                        class_counts,
+                    )
+                }
+
+                group_record = {
+                    "group": str(group_name),
+                    "n_train": int(len(group_positions)),
+                    "n_classes": int(len(observed_classes)),
+                    "classes": observed_classes.tolist(),
+                    "class_counts": class_count_dict,
+                    "n_negative": int((group_y == 0).sum()),
+                    "n_positive": int((group_y == 1).sum()),
+                }
+
+                # A separate model is not useful for extremely small groups.
+                if len(group_positions) < min_group_train_size:
+                    skip_record = {
+                        **group_record,
+                        "status": "skipped",
+                        "reason": "too_few_training_rows",
+                    }
+
+                    skipped_compositional_groups.append(skip_record)
+                    compositional_group_summary.append(skip_record)
+
+                    print(
+                        "[Combined Compositional] Using pooled fallback for "
+                        f"group={group_name!r}: n_train="
+                        f"{len(group_positions)} is below "
+                        f"min_group_train_size={min_group_train_size}."
+                    )
+
                     continue
-                #Build and fit estimator on group-specific data
-                est = build_estimator(model_name, params)
-                #Fit the data for this group only (Functionality with reweighting not validated)
-                fit_with_optional_sample_weight(est, Xtr_t[m], ytr.to_numpy()[m], sample_weight=None)
-                models[str(g)] = est
 
-            #Generate predictions on test set using the per-group models
-            p_test = np.zeros(len(Xte_t))
-            for i, g in enumerate(Ate):
-                est = models.get(str(g)) #Get the model for this group
-                if est is None: 
-                    #If no model was found for this group, fall back to a pooled model training across all groups
-                    pooled = build_estimator(model_name, params)
-                    fit_with_optional_sample_weight(pooled, Xtr_t, ytr.to_numpy(), sample_weight=sample_weight)
-                    #Make prediction with pooled model
-                    p_test[i] = to_proba(pooled, Xte_t[i:i+1])[0]
-                else:
-                    #Make prediction with group-specific model
-                    p_test[i] = to_proba(est, Xte_t[i:i+1])[0]
+                # Binary classifiers such as LogisticRegression cannot fit a
+                # training subset containing only one class.
+                if len(observed_classes) < 2:
+                    skip_record = {
+                        **group_record,
+                        "status": "skipped",
+                        "reason": "single_training_class",
+                    }
 
-            #Some post-processing requires validation probabilities; compute them now using a pooled model (TODO: Integrate per-group val scoring)
-            pooled = build_estimator(model_name, params)
-            fit_with_optional_sample_weight(pooled, Xtr_t, ytr.to_numpy(), sample_weight=sample_weight)
-            P_val = to_proba(pooled, Xva_t)
-            trained_est = pooled  #use pooled for re-scoring if needed later
+                    skipped_compositional_groups.append(skip_record)
+                    compositional_group_summary.append(skip_record)
+
+                    print(
+                        "[Combined Compositional] Using pooled fallback for "
+                        f"group={group_name!r}: classes="
+                        f"{observed_classes.tolist()}, class_counts="
+                        f"{class_count_dict}."
+                    )
+
+                    continue
+
+                group_estimator = build_estimator(
+                    model_name,
+                    dict(params or {}),
+                )
+
+                group_weights = None
+
+                if training_weights is not None:
+                    group_weights = training_weights[
+                        group_positions
+                    ]
+
+                try:
+                    fit_with_optional_sample_weight(
+                        group_estimator,
+                        Xtr_t[group_positions],
+                        group_y,
+                        sample_weight=group_weights,
+                    )
+
+                except ValueError as exc:
+                    error_text = str(exc).lower()
+
+                    class_error_phrases = (
+                        "at least 2 classes",
+                        "at least two classes",
+                        "only one class",
+                        "contains only one class",
+                    )
+
+                    if any(
+                        phrase in error_text
+                        for phrase in class_error_phrases
+                    ):
+                        skip_record = {
+                            **group_record,
+                            "status": "skipped",
+                            "reason": (
+                                "estimator_rejected_group_classes"
+                            ),
+                            "error": str(exc),
+                        }
+
+                        skipped_compositional_groups.append(
+                            skip_record
+                        )
+                        compositional_group_summary.append(
+                            skip_record
+                        )
+
+                        print(
+                            "[Combined Compositional] Estimator rejected "
+                            f"group={group_name!r}; using pooled fallback. "
+                            f"Error: {exc}"
+                        )
+
+                        continue
+
+                    raise
+
+                models[str(group_name)] = group_estimator
+
+                compositional_group_summary.append({
+                    **group_record,
+                    "status": "trained",
+                    "reason": None,
+                })
+
+            # ---------------------------------------------------------
+            # Helper for group-aware probability generation
+            # ---------------------------------------------------------
+            def _predict_compositional_probabilities(
+                X_transformed,
+                group_values,
+            ):
+                group_values = (
+                    pd.Series(group_values)
+                    .astype(str)
+                    .to_numpy()
+                )
+
+                probabilities = np.full(
+                    len(group_values),
+                    np.nan,
+                    dtype=float,
+                )
+
+                prediction_sources = np.empty(
+                    len(group_values),
+                    dtype=object,
+                )
+
+                for group_name in pd.unique(group_values):
+                    positions = np.flatnonzero(
+                        group_values == str(group_name)
+                    )
+
+                    estimator = models.get(
+                        str(group_name),
+                        pooled,
+                    )
+
+                    source = (
+                        "group_specific"
+                        if str(group_name) in models
+                        else "pooled_fallback"
+                    )
+
+                    group_probabilities = to_proba(
+                        estimator,
+                        X_transformed[positions],
+                    )
+
+                    group_probabilities = np.asarray(
+                        group_probabilities,
+                        dtype=float,
+                    )
+
+                    if group_probabilities.ndim == 2:
+                        if group_probabilities.shape[1] >= 2:
+                            group_probabilities = (
+                                group_probabilities[:, 1]
+                            )
+                        else:
+                            group_probabilities = (
+                                group_probabilities[:, 0]
+                            )
+
+                    group_probabilities = (
+                        group_probabilities.ravel()
+                    )
+
+                    if len(group_probabilities) != len(positions):
+                        raise RuntimeError(
+                            "The compositional estimator returned an "
+                            "unexpected number of probabilities for "
+                            f"group={group_name!r}: expected "
+                            f"{len(positions)}, received "
+                            f"{len(group_probabilities)}."
+                        )
+
+                    probabilities[positions] = (
+                        group_probabilities
+                    )
+
+                    prediction_sources[positions] = source
+
+                if np.isnan(probabilities).any():
+                    missing_positions = np.flatnonzero(
+                        np.isnan(probabilities)
+                    )
+
+                    raise RuntimeError(
+                        "Compositional prediction failed to assign "
+                        f"probabilities to {len(missing_positions)} "
+                        "observations. First missing positions: "
+                        f"{missing_positions[:20].tolist()}."
+                    )
+
+                return (
+                    np.clip(probabilities, 0.0, 1.0),
+                    prediction_sources,
+                )
+
+            # ---------------------------------------------------------
+            # Generate validation probabilities
+            # ---------------------------------------------------------
+            #
+            # These must use the same compositional decision rule as the test
+            # probabilities because later post-processing techniques may be
+            # fitted or tuned using validation predictions.
+            P_val, compositional_val_sources = (
+                _predict_compositional_probabilities(
+                    Xva_t,
+                    Ava_array,
+                )
+            )
+
+            # ---------------------------------------------------------
+            # Generate test probabilities
+            # ---------------------------------------------------------
+            p_test, compositional_test_sources = (
+                _predict_compositional_probabilities(
+                    Xte_t,
+                    Ate_array,
+                )
+            )
+
+            # ---------------------------------------------------------
+            # Preserve state for later post-processing and FairModel creation
+            # ---------------------------------------------------------
+            #
+            # The pooled model remains useful for generic rescoring and as the
+            # fallback for groups without a valid group-specific estimator.
+            trained_est = pooled
+
             predictor_mode = "compositional"
+
             group_models_for_fairmodel = models
+
             fallback_estimator_for_fairmodel = pooled
+
+            # Store diagnostics so they can be added to FairModel metadata or
+            # the final RunResult notes later in run_combined_pipeline().
+            compositional_metadata = {
+                "min_group_train_size": int(
+                    min_group_train_size
+                ),
+                "n_training_groups": int(
+                    len(pd.unique(Atr_array))
+                ),
+                "n_group_models": int(
+                    len(models)
+                ),
+                "trained_groups": sorted(
+                    models.keys()
+                ),
+                "n_skipped_groups": int(
+                    len(skipped_compositional_groups)
+                ),
+                "skipped_groups": (
+                    skipped_compositional_groups
+                ),
+                "group_training_summary": (
+                    compositional_group_summary
+                ),
+                "fallback_model": "pooled",
+                "sample_weight_used": (
+                    training_weights is not None
+                ),
+                "validation_prediction_source_counts": {
+                    str(source): int(count)
+                    for source, count in (
+                        pd.Series(
+                            compositional_val_sources
+                        )
+                        .value_counts(dropna=False)
+                        .items()
+                    )
+                },
+                "test_prediction_source_counts": {
+                    str(source): int(count)
+                    for source, count in (
+                        pd.Series(
+                            compositional_test_sources
+                        )
+                        .value_counts(dropna=False)
+                        .items()
+                    )
+                },
+            }
 
         #Ensemble of K=5 group-balanced bootstrapped models
         elif choice == "In:Ensemble (K=5)":
