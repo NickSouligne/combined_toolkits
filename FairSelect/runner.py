@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 import traceback
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 from .utils import confusion_rates, filter_intersectional_groups
-import FairLogue as ift
+from FairLogue.Component1.intersectional_metrics import (
+    evaluate_intersectional_fairness,
+)
 import pandas as pd
 from FairModel import FairModel
 
@@ -87,6 +89,12 @@ class PipelineConfig:
     fairlogue_comp1: bool = False
     fairlogue_comp2: bool = False
     fairlogue_comp3: bool = False
+    
+    # FairLogue Component 1 settings
+    fairlogue_comp1_make_plots: bool = True
+    fairlogue_comp1_return_non_intersectional: bool = True
+    fairlogue_comp1_min_group_size: int = 0
+    fairlogue_comp1_require_class_balance: bool = True
 
     fairlogue_comp3_method: str = "sr"
     fairlogue_comp3_n_splits: int = 5
@@ -249,33 +257,62 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
             r.notes = (r.notes + "\n" + filter_note).strip()
 
     if cfg.fairlogue_comp1 or cfg.fairlogue_comp3:
-            for r in results:
+        for r in results:
+            if r.fairlogue is None:
                 r.fairlogue = {}
 
-                if cfg.fairlogue_comp1:
-                    r.fairlogue["component1"] = _run_fairlogue_component1_for_result(
+            if cfg.fairlogue_comp1:
+                r.fairlogue["component1"] = (
+                    _run_fairlogue_component1_for_result(
                         rr=r,
                         df=df,
                         target=cfg.target,
                         protected=protected,
                         features=features,
+                        make_plots=(
+                            cfg.fairlogue_comp1_make_plots
+                        ),
+                        return_non_intersectional=(
+                            cfg
+                            .fairlogue_comp1_return_non_intersectional
+                        ),
+                        min_group_size=(
+                            cfg.fairlogue_comp1_min_group_size
+                        ),
+                        require_class_balance=(
+                            cfg
+                            .fairlogue_comp1_require_class_balance
+                        ),
+                        positive_label=1,
+                        random_state=cfg.random_state,
                     )
+                )
 
-                if cfg.fairlogue_comp3:
-                   r.fairlogue["component3"] = _run_fairlogue_component3_for_result(
+            if cfg.fairlogue_comp3:
+                r.fairlogue["component3"] = (
+                    _run_fairlogue_component3_for_result(
                         rr=r,
                         df=df,
                         target=cfg.target,
                         protected=protected,
                         features=features,
                         method=cfg.fairlogue_comp3_method,
-                        n_splits=cfg.fairlogue_comp3_n_splits,
-                        gen_null=cfg.fairlogue_comp3_gen_null,
-                        R_null=cfg.fairlogue_comp3_R_null,
-                        bootstrap=cfg.fairlogue_comp3_bootstrap,
+                        n_splits=(
+                            cfg.fairlogue_comp3_n_splits
+                        ),
+                        gen_null=(
+                            cfg.fairlogue_comp3_gen_null
+                        ),
+                        R_null=(
+                            cfg.fairlogue_comp3_R_null
+                        ),
+                        bootstrap=(
+                            cfg.fairlogue_comp3_bootstrap
+                        ),
                         B=cfg.fairlogue_comp3_B,
                         random_state=cfg.random_state,
                     )
+                )
 
 
     return results
@@ -287,38 +324,94 @@ def _run_fairlogue_component1_for_result(
     rr: RunResult,
     df: pd.DataFrame,
     target: str,
-    protected: list[str],
-    features: list[str],
-):
+    protected: Sequence[str],
+    features: Sequence[str],
+    make_plots: bool = True,
+    return_non_intersectional: bool = True,
+    min_group_size: int = 0,
+    require_class_balance: bool = False,
+    positive_label: Any = 1,
+    random_state: int = 42,
+) -> Dict[str, Any]:
     """
-    Run FairLogue Component 1 using the fitted FairModel attached to a FairSelect result.
+    Run FairLogue Component 1 using the fitted FairModel stored
+    in a FairSelect RunResult.
 
-    Component 1 should evaluate observed/intersectional fairness from the
-    model's predictions, not refit a new model.
+    This function does not reimplement fairness metrics and does
+    not refit the model. It delegates the analysis directly to:
+
+        FairLogue.Component1.intersectional_metrics
+            .evaluate_intersectional_fairness()
+
+    The FairSelect held-out test rows are supplied to FairLogue as
+    test_df. All remaining rows are supplied as train_df only to
+    satisfy FairLogue's caller-provided split interface and provide
+    descriptive training information. The supplied FairModel is
+    already fitted and is therefore not retrained.
     """
 
-    if getattr(rr, "fair_model", None) is None:
-        return {
-            "status": "skipped",
-            "reason": "RunResult has no fair_model attached.",
-        }
+    # ---------------------------------------------------------
+    # Validate the FairModel
+    # ---------------------------------------------------------
+    fair_model = getattr(rr, "fair_model", None)
 
-    fair_model = rr.fair_model
-
-    if getattr(rr, "test_index", None) is None:
+    if fair_model is None:
         return {
             "status": "skipped",
             "component": "FairLogue Component 1",
             "reason": (
-                "RunResult does not contain test indices. "
-                "The FairLogue audit was not run to avoid "
-                "evaluating on training observations."
+                "The FairSelect RunResult does not contain an "
+                "attached FairModel."
             ),
         }
 
+    # Ensure the model carries the correct outcome metadata.
+    if getattr(fair_model, "outcome_col", None) is None:
+        fair_model.outcome_col = target
+
+    if getattr(fair_model, "positive_label", None) is None:
+        fair_model.positive_label = positive_label
+
+    # ---------------------------------------------------------
+    # Component 1 currently requires two protected attributes
+    # ---------------------------------------------------------
+    protected = list(protected)
+
+    if len(protected) != 2:
+        return {
+            "status": "skipped",
+            "component": "FairLogue Component 1",
+            "reason": (
+                "FairLogue Component 1 currently expects exactly "
+                "two protected characteristics. "
+                f"Received {len(protected)}: {protected}."
+            ),
+        }
+
+    protected_1, protected_2 = protected
+
+    # ---------------------------------------------------------
+    # Recover the exact FairSelect held-out test observations
+    # ---------------------------------------------------------
+    test_index = getattr(rr, "test_index", None)
+
+    if test_index is None:
+        return {
+            "status": "skipped",
+            "component": "FairLogue Component 1",
+            "reason": (
+                "RunResult does not contain test_index. Component 1 "
+                "was not run because the FairSelect held-out test "
+                "observations cannot be identified safely."
+            ),
+        }
+
+    test_index = list(test_index)
+
     missing_test_indices = [
-        idx for idx in rr.test_index
-        if idx not in df.index
+        index
+        for index in test_index
+        if index not in df.index
     ]
 
     if missing_test_indices:
@@ -326,58 +419,241 @@ def _run_fairlogue_component1_for_result(
             "status": "failed",
             "component": "FairLogue Component 1",
             "reason": (
-                f"{len(missing_test_indices)} test indices were "
-                "not found in the audit DataFrame."
+                f"{len(missing_test_indices)} stored test indices "
+                "were not found in the FairSelect DataFrame."
+            ),
+            "missing_test_indices": missing_test_indices[:20],
+        }
+
+    # Preserve the original row indices. FairLogue operates on copies.
+    test_df = df.loc[test_index].copy()
+
+    train_index = df.index.difference(
+        pd.Index(test_index),
+        sort=False,
+    )
+
+    train_df = df.loc[train_index].copy()
+
+    if test_df.empty:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 1",
+            "reason": "The reconstructed FairSelect test set is empty.",
+        }
+
+    if train_df.empty:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 1",
+            "reason": (
+                "The reconstructed non-test dataset is empty. "
+                "FairLogue requires both train_df and test_df when "
+                "a caller-provided split is used."
             ),
         }
 
-    audit_df = df.loc[rr.test_index].copy()
-
-    # Use the FairModel generated by FairSelect
-    audit_df["_fairselect_score"] = fair_model.predict_proba(audit_df)
-    audit_df["_fairselect_pred"] = fair_model.predict(audit_df)
-
-    # Create intersectional group
-    audit_df["_intersectional_group"] = (
-        audit_df[protected]
-        .astype(str)
-        .agg("|".join, axis=1)
+    # ---------------------------------------------------------
+    # Validate required columns
+    # ---------------------------------------------------------
+    model_features = list(
+        getattr(
+            fair_model,
+            "features",
+            features,
+        )
     )
 
-    # Minimal Component 1-style observed audit
-    # This avoids refitting anything.
-    rows = []
+    required_columns = list(
+        dict.fromkeys(
+            [
+                target,
+                protected_1,
+                protected_2,
+                *model_features,
+            ]
+        )
+    )
 
-    for g, sub in audit_df.groupby("_intersectional_group"):
-        y_true = sub[target].astype(int).to_numpy()
-        yhat = sub["_fairselect_pred"].astype(int).to_numpy()
-        p = sub["_fairselect_score"].astype(float).to_numpy()
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
 
-        cr = confusion_rates(y_true, yhat)
+    if missing_columns:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 1",
+            "reason": (
+                "The FairLogue audit data are missing columns "
+                f"required by the FairModel: {missing_columns}"
+            ),
+        }
 
-        rows.append({
-            "group": str(g),
-            "n": int(len(sub)),
-            "prevalence": float(y_true.mean()) if len(y_true) else None,
-            "predicted_positive_rate": float(yhat.mean()) if len(yhat) else None,
-            "mean_score": float(p.mean()) if len(p) else None,
-            "TPR": cr.get("TPR"),
-            "FPR": cr.get("FPR"),
-            "TNR": cr.get("TNR"),
-            "FNR": cr.get("FNR"),
-            "PPV": cr.get("PPV"),
-            "NPV": cr.get("NPV"),
-        })
+    # FairLogue uses df for feature validation, group summaries,
+    # and optional cohort filtering. Because FairSelect already
+    # filtered df, pass the same filtered cohort here.
+    fairlogue_df = df[
+        required_columns
+    ].copy()
 
-    group_df = pd.DataFrame(rows)
+    fairlogue_train_df = train_df[
+        required_columns
+    ].copy()
 
-    return {
-        "status": "ok",
-        "component": "FairLogue Component 1",
-        "audit_source": "FairSelect FairModel",
-        "model_name": getattr(fair_model, "name", rr.name),
-        "group_stats": group_df,
-    }
+    fairlogue_test_df = test_df[
+        required_columns
+    ].copy()
+
+    try:
+        # -----------------------------------------------------
+        # Delegate all metric computation to FairLogue
+        # -----------------------------------------------------
+        results, figures, intermediates = (
+            evaluate_intersectional_fairness(
+                df=fairlogue_df,
+                outcome=target,
+                protected_1=protected_1,
+                protected_2=protected_2,
+                features=model_features,
+
+                # This is informational when fair_model is supplied.
+                model_type=getattr(
+                    fair_model,
+                    "model_type",
+                    "fairselect",
+                ),
+                model_params=None,
+
+                # Critical integration point:
+                # FairLogue uses this fitted model and does not refit.
+                fair_model=fair_model,
+
+                positive_label=positive_label,
+
+                # None tells FairLogue to use fair_model.threshold.
+                threshold=None,
+
+                make_plots=make_plots,
+
+                # Use FairSelect's exact held-out split.
+                train_df=fairlogue_train_df,
+                test_df=fairlogue_test_df,
+
+                # Return predictions, model metrics, and
+                # nonintersectional results.
+                return_intermediates=True,
+                return_non_intersectional=(
+                    return_non_intersectional
+                ),
+
+                # FairSelect already filtered the full cohort.
+                min_group_size=min_group_size,
+                require_class_balance=(
+                    require_class_balance
+                ),
+            )
+        )
+
+        # -----------------------------------------------------
+        # Retain the actual FairLogue objects and expose common
+        # tables explicitly for the result-saving layer
+        # -----------------------------------------------------
+        non_intersectional = intermediates.get(
+            "non_intersectional"
+        )
+
+        component1_output = {
+            "status": "ok",
+            "component": "FairLogue Component 1",
+            "audit_source": (
+                "FairSelect fitted FairModel evaluated through "
+                "FairLogue.evaluate_intersectional_fairness"
+            ),
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "model_type": getattr(
+                fair_model,
+                "model_type",
+                None,
+            ),
+            "outcome_col": target,
+            "positive_label": positive_label,
+            "protected_1": protected_1,
+            "protected_2": protected_2,
+            "n_train": int(len(fairlogue_train_df)),
+            "n_test": int(len(fairlogue_test_df)),
+            "test_index": test_index,
+
+            # Preserve the full FairLogue return values.
+            "results": results,
+            "figures": figures,
+            "intermediates": intermediates,
+
+            # Expose commonly saved fields directly.
+            "per_group_df": results.per_group_df,
+            "groups": results.groups,
+            "demographic_parity_gap": (
+                results.demographic_parity_gap
+            ),
+            "equalized_odds_gap_tpr": (
+                results.equalized_odds_gap_tpr
+            ),
+            "equalized_odds_gap_fpr": (
+                results.equalized_odds_gap_fpr
+            ),
+            "equal_opportunity_gap": (
+                results.equal_opportunity_gap
+            ),
+            "dropped_groups": results.dropped_groups,
+            "kept_groups_summary": (
+                results.kept_groups_summary
+            ),
+
+            # FairLogue's race-only/gender-only equivalents.
+            "non_intersectional": non_intersectional,
+
+            # FairLogue-generated held-out model outputs.
+            "y_test": intermediates.get("y_test"),
+            "y_hat": intermediates.get("y_hat"),
+            "proba": intermediates.get("proba"),
+            "groups_test": intermediates.get(
+                "groups_test"
+            ),
+            "protected_1_test": intermediates.get(
+                "protected_1_test"
+            ),
+            "protected_2_test": intermediates.get(
+                "protected_2_test"
+            ),
+            "model_metrics": intermediates.get(
+                "model_metrics"
+            ),
+        }
+
+        return component1_output
+
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 1",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "outcome_col": target,
+            "protected_1": protected_1,
+            "protected_2": protected_2,
+            "n_train": int(len(fairlogue_train_df)),
+            "n_test": int(len(fairlogue_test_df)),
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
 
 
 def _run_fairlogue_component3_for_result(

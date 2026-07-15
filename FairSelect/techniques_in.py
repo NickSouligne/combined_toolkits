@@ -15,87 +15,199 @@ from .FairModel_helper import GroupModelPredictor, make_standard_fair_model, Sta
 from FairModel import FairModel
 
 
-def run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col = None):
-    '''
-    Runs compositional per-group models (in-processing): one model per group in training data
-    Falls back to pooled model if group not seen in training data
-    0.5 cutoff
-    '''
-    #Get unique groups in training data
-    groups = pd.Series(A_tr).unique()
-    #Build a preprocessor on train+val
-    prep = build_preprocessor(pd.concat([X_tr,X_va]), protected_cols)
-    #Fit the preprocessor on train+val
-    prep.fit(pd.concat([X_tr,X_va]))
-    models = {} #Store trained classifiers for each label
-    
-    #Train per-group models
+def run_compositional_models(
+    model_name,
+    params,
+    X_tr,
+    X_va,
+    X_te,
+    y_tr,
+    y_va,
+    y_te,
+    A_tr,
+    A_va,
+    A_te,
+    protected_cols,
+    all_df_train,
+    outcome_col=None,
+):
+    """
+    Train one model per intersectional group.
+
+    A group-specific model is trained only when its training subset:
+      1. contains at least min_group_train_size observations; and
+      2. contains both outcome classes.
+
+    Test observations whose groups do not have a valid group-specific
+    model are evaluated using a pooled fallback model.
+    """
+
+    del all_df_train
+    del A_va
+
+    min_group_train_size = 5
+
+    if not X_tr.index.equals(y_tr.index):
+        y_tr = y_tr.reindex(X_tr.index)
+
+    if not X_tr.index.equals(A_tr.index):
+        A_tr = A_tr.reindex(X_tr.index)
+
+    if not X_te.index.equals(y_te.index):
+        y_te = y_te.reindex(X_te.index)
+
+    if not X_te.index.equals(A_te.index):
+        A_te = A_te.reindex(X_te.index)
+
+    # Fit preprocessing on training data only
+    prep = build_preprocessor(
+        X_tr,
+        protected_cols,
+    )
+
+    prep.fit(X_tr)
+
+    Xtr_transformed = prep.transform(X_tr)
+    Xte_transformed = prep.transform(X_te)
+
+    # Always fit one pooled fallback model
+    pooled_model = build_estimator(
+        model_name,
+        dict(params or {}),
+    )
+
+    pooled_model.fit(
+        Xtr_transformed,
+        y_tr.to_numpy(),
+    )
+
+    groups = pd.Series(
+        A_tr.astype(str),
+        index=A_tr.index,
+    ).unique()
+
+    models = {}
+    skipped_groups = []
+
     for g in groups:
-        #Boolean mask to select only records from group g
-        m = (A_tr==g)
-        #Skip groups with too few samples (5 is arbitrary, may need to revisit)
-        if m.sum()<5:
+        mask = A_tr.astype(str) == str(g)
+
+        group_indices = np.flatnonzero(
+            mask.to_numpy()
+        )
+
+        group_y = y_tr.iloc[group_indices]
+        group_n = len(group_indices)
+        observed_classes = np.unique(
+            group_y.to_numpy()
+        )
+
+        if group_n < min_group_train_size:
+            skipped_groups.append({
+                "group": str(g),
+                "reason": "too_few_training_rows",
+                "n_train": int(group_n),
+                "classes": observed_classes.tolist(),
+            })
             continue
-        #Build and fit the estimator on only group g data
-        clf = build_estimator(model_name, params)
-        clf.fit(prep.transform(X_tr[m]), y_tr[m])
-        models[str(g)] = clf #Store classifier in the dict
-    
-    
-    #Predict on test set using per-group models
 
-    #Array to hold test-set probabilities P[i] = P(Y=1 | X_te[i])
-    P = np.zeros(len(X_te))
-    #Iterate over each test instance and group label
-    for i, g in enumerate(A_te):
-        g = str(g) #Convert to string for dict lookup
+        if len(observed_classes) < 2:
+            skipped_groups.append({
+                "group": str(g),
+                "reason": "single_training_class",
+                "n_train": int(group_n),
+                "classes": observed_classes.tolist(),
+            })
+            continue
 
-        if g in models: #If model for this group exists use it
-            #Extracts the i-th test instance, transforms it, predicts probability (transform expects 2D array (shape, (1, n_features)))
-            P[i] = to_proba(models[g], prep.transform(X_te.iloc[[i], :]))[0] #to_proba returns 1d array, take first element
-        else:
-            #Group not seen in training data, fall back to pooled model
-            pooled = build_estimator(model_name, params)
-            pooled.fit(prep.transform(X_tr), y_tr)
-            P[i] = to_proba(pooled, prep.transform(X_te.iloc[[i], :]))[0]
-    #Hard predictions at 0.5 threshold (TODO: Allow user to define different threshold)
-    yhat = (P >= 0.5).astype(int)
-    fallback_model = build_estimator(model_name, params)
-    fallback_model.fit(prep.transform(X_tr), y_tr)
+        group_model = build_estimator(
+            model_name,
+            dict(params or {}),
+        )
+
+        group_model.fit(
+            Xtr_transformed[group_indices],
+            group_y.to_numpy(),
+        )
+
+        models[str(g)] = group_model
+
+    # Predict test probabilities
+    probabilities = np.zeros(
+        len(X_te),
+        dtype=float,
+    )
+
+    A_test_string = A_te.astype(str).to_numpy()
+
+    for group_name in np.unique(A_test_string):
+        test_mask = A_test_string == group_name
+        test_positions = np.flatnonzero(test_mask)
+
+        selected_model = models.get(
+            str(group_name),
+            pooled_model,
+        )
+
+        probabilities[test_positions] = to_proba(
+            selected_model,
+            Xte_transformed[test_positions],
+        )
+
+    probabilities = np.clip(
+        probabilities,
+        0.0,
+        1.0,
+    )
+
+    predictions = (
+        probabilities >= 0.5
+    ).astype(int)
 
     predictor = GroupModelPredictor(
-        features=X_tr.columns,
-        protected_cols=protected_cols,
+        features=list(X_tr.columns),
+        protected_cols=list(protected_cols),
         preprocessor=prep,
         group_models=models,
-        fallback_model=fallback_model,
+        fallback_model=pooled_model,
         threshold=0.5,
     )
 
     fair_model = make_predictor_fair_model(
         name="In: Compositional (per-group)",
-        features=X_tr.columns,
-        protected_cols=protected_cols,
+        features=list(X_tr.columns),
+        protected_cols=list(protected_cols),
         predictor=predictor,
-        outcome_col=outcome_col,
         threshold=0.5,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "In:Compositional per-group",
             "model_name": model_name,
-            "model_params": params,
+            "model_params": dict(params or {}),
             "n_group_models": len(models),
+            "trained_groups": sorted(models.keys()),
+            "skipped_groups": skipped_groups,
+            "fallback_model": "pooled",
+            "min_group_train_size": min_group_train_size,
         },
+    )
+
+    notes = (
+        f"Trained {len(models)} group-specific models. "
+        f"Skipped {len(skipped_groups)} groups; observations from "
+        "those groups use the pooled fallback model."
     )
 
     return evaluate_run(
         "In: Compositional (per-group)",
-        y_te.to_numpy(),
-        P,
-        yhat,
+        y_te,
+        probabilities,
+        predictions,
         A_te,
         fair_model=fair_model,
-        test_index=X_te.index,
+        test_index=list(X_te.index),
+        notes=notes,
     )
 
 def run_prejudice_remover(model_name, params,

@@ -31,6 +31,8 @@ class RunResult:
     test_index: list | None = None
     y_test: object | None = None
     A_test: object | None = None
+    y_prob_test: object | None = None
+    y_pred_test: object | None = None
 
 #---Core training runners---
 def build_estimator(model_name: str, params: Dict[str, Any]):
@@ -358,6 +360,8 @@ def evaluate_run(
             test_index=test_index_saved,
             y_test=y_test_saved,
             A_test=A_test_saved,
+            y_prob_test=np.asarray(p).copy(),
+            y_pred_test=np.asarray(yhat).copy(),
         )
 
 
