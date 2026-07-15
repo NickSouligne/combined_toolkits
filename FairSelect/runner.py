@@ -142,38 +142,65 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
 
     Returns a list of RunResult objects in the same style/order the GUI produced.
     """
-    df = _load_df(cfg.df_or_path)
+    if isinstance(cfg.df_or_path, pd.DataFrame):
+        df = cfg.df_or_path.copy()
+    else:
+        df = pd.read_csv(cfg.df_or_path)
 
+    target = cfg.target
     protected = list(cfg.protected)
-    features = _normalize_features(df=df, target=cfg.target, protected=protected, features=cfg.features)
-    filter_note = ""
+    features = list(cfg.features)
 
-    if cfg.filter_small_groups:
-        df, removed_groups, filter_note = filter_intersectional_groups(
-            df=df,
-            protected_cols=protected,
-            target_col=cfg.target,
-            min_group_size=cfg.min_group_size,
-            require_outcome_coverage=cfg.require_outcome_coverage,
+    # ---------------------------------------------------------
+    # Validate required columns
+    # ---------------------------------------------------------
+    required_columns = list(
+        dict.fromkeys(
+            features
+            + protected
+            + [target]
+        )
+    )
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "The input DataFrame is missing required columns: "
+            f"{missing_columns}"
         )
 
-        print("\n[FairSelect group filtering]")
-        print(filter_note)
+    # ---------------------------------------------------------
+    # Construct model inputs
+    # ---------------------------------------------------------
+    X = df[features].copy()
+    y = df[target].copy()
 
-        if len(removed_groups) > 0:
-            print("\nRemoved intersectional groups:")
-            print(removed_groups.to_string(index=False))
+    if len(protected) == 1:
+        A = (
+            df[protected[0]]
+            .astype(str)
+            .copy()
+        )
+    else:
+        A = (
+            df[protected]
+            .astype(str)
+            .agg("|".join, axis=1)
+        )
 
-        if df.empty:
-            raise ValueError(
-                "All rows were removed by the intersectional group filter. "
-                "Lower min_group_size or disable require_outcome_coverage."
-            )
+    # Keep all objects on the same original DataFrame index.
+    X.index = df.index
+    y.index = df.index
+    A.index = df.index
 
     # ---------------------------------------------------------
-    # Create or apply the train/validation/test split
+    # Apply supplied split indices or create a new split
     # ---------------------------------------------------------
-
     supplied_splits = [
         cfg.train_index,
         cfg.validation_index,
@@ -199,7 +226,6 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
         )
         test_index = list(cfg.test_index)
 
-        # Verify that all supplied indices exist in the filtered cohort.
         all_requested_indices = (
             train_index
             + validation_index
@@ -214,30 +240,44 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
 
         if missing_indices:
             raise ValueError(
-                f"{len(missing_indices)} externally supplied split "
-                "indices were not found in the filtered FairSelect "
-                f"cohort. First missing indices: "
-                f"{missing_indices[:20]}"
+                f"{len(missing_indices)} supplied split indices "
+                "were not found in the FairSelect cohort. "
+                f"First missing indices: {missing_indices[:20]}"
             )
 
-        # Verify that the splits do not overlap.
         train_set = set(train_index)
         validation_set = set(validation_index)
         test_set = set(test_index)
 
-        if train_set & validation_set:
+        train_validation_overlap = (
+            train_set & validation_set
+        )
+        train_test_overlap = (
+            train_set & test_set
+        )
+        validation_test_overlap = (
+            validation_set & test_set
+        )
+
+        if train_validation_overlap:
             raise ValueError(
-                "train_index and validation_index overlap."
+                "train_index and validation_index overlap. "
+                f"First overlapping indices: "
+                f"{list(train_validation_overlap)[:20]}"
             )
 
-        if train_set & test_set:
+        if train_test_overlap:
             raise ValueError(
-                "train_index and test_index overlap."
+                "train_index and test_index overlap. "
+                f"First overlapping indices: "
+                f"{list(train_test_overlap)[:20]}"
             )
 
-        if validation_set & test_set:
+        if validation_test_overlap:
             raise ValueError(
-                "validation_index and test_index overlap."
+                "validation_index and test_index overlap. "
+                f"First overlapping indices: "
+                f"{list(validation_test_overlap)[:20]}"
             )
 
         X_tr = X.loc[train_index].copy()
