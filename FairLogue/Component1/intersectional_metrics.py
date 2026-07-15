@@ -862,6 +862,6 @@ def evaluate_intersectional_fairness(
             },
             "non_intersectional": non_intersectional,
         }
-       return results, figs, intermediates
+        return results, figs, intermediates
 
     return results, figs
