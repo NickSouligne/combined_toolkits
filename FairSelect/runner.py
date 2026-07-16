@@ -197,7 +197,7 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
     X.index = df.index
     y.index = df.index
     A.index = df.index
-    
+
     if all(
         index_set is not None
         for index_set in [
@@ -352,9 +352,6 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
         if getattr(result, "A_test", None) is None:
             result.A_test = A_te.copy()
     
-    for r in results:
-        if filter_note:
-            r.notes = (r.notes + "\n" + filter_note).strip()
 
     if cfg.fairlogue_comp1 or cfg.fairlogue_comp3:
         for r in results:
