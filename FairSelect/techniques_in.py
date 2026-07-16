@@ -1766,7 +1766,7 @@ def run_reductions_meta(
 
 def run_baseline(model_name, params,
                  X_tr, X_va, X_te, y_tr, y_va, y_te,
-                 A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col) -> RunResult:
+                 A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col = None) -> RunResult:
     """
     Baseline pipeline with *no fairness interventions*.
 
@@ -1798,24 +1798,27 @@ def run_baseline(model_name, params,
         preprocessor=pipe.named_steps["prep"],
         estimator=pipe.named_steps["clf"],
         threshold=0.5,
+        outcome_col=outcome_col,
         metadata={
             "source": "FairSelect",
             "technique": "Baseline",
             "model_name": model_name,
-            "model_params": params,
+            "model_params": dict(params or {}),
             "outcome_col": outcome_col,
         },
     )
 
-    return evaluate_run(
+    result = evaluate_run(
         "Baseline",
         y_te,
         p_test,
         yhat,
         A_te,
         fair_model=fair_model,
-        test_index=X_te.index,
+        test_index=list(X_te.index),
     )
+
+    return result
 
 
 def fit_isotonic_by_group(groups: pd.Series, p_val: np.ndarray, y_val: np.ndarray) -> Dict[str, IsotonicRegression]:
