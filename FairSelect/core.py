@@ -246,7 +246,7 @@ def evaluate_run(
     *,
     fair_model=None,
     notes: str = "",
-    run_fairlogue: bool = False,
+    run_fairlogue: bool = True,
     test_index=None,
 ) -> RunResult:
     """
@@ -350,19 +350,16 @@ def evaluate_run(
             run_name=name,
         )
 
-        return RunResult(
-            name=name,
-            overall=overall,
-            group_stats=group_df,
-            notes=notes,
-            fairlogue=fairlogue_results,
-            fair_model=fair_model,
-            test_index=test_index_saved,
-            y_test=y_test_saved,
-            A_test=A_test_saved,
-            y_prob_test=np.asarray(p).copy(),
-            y_pred_test=np.asarray(yhat).copy(),
-        )
-
-
-    return RunResult(name=name, overall=overall, group_stats=group_df)
+    return RunResult(
+        name=name,
+        overall=overall,
+        group_stats=group_df,
+        notes=notes,
+        fairlogue=fairlogue_results,
+        fair_model=fair_model,
+        test_index=test_index_saved,
+        y_test=y_test_saved,
+        A_test=A_test_saved,
+        y_prob_test=np.asarray(p).copy(),
+        y_pred_test=np.asarray(yhat).copy(),
+    )
