@@ -305,6 +305,9 @@ class FairModel:
 
         This method is safe to call independently inside each CV fold.
         """
+
+        from FairSelect.core import build_estimator, build_preprocessor
+        
         features = [
             col for col in features
             if col != outcome_col
