@@ -105,6 +105,7 @@ class PipelineConfig:
     fairlogue_comp3_R_null: int = 100
     fairlogue_comp3_bootstrap: str = "none"
     fairlogue_comp3_B: int = 100
+    fairlogue_comp3_m_factor: float = 0.75
 
 def _load_df(df_or_path: Union[pd.DataFrame, str]) -> pd.DataFrame:
     if isinstance(df_or_path, pd.DataFrame):
@@ -408,6 +409,7 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
                         ),
                         B=cfg.fairlogue_comp3_B,
                         random_state=cfg.random_state,
+                        m_factor=cfg.fairlogue_comp3_m_factor
                     )
                 )
 
@@ -758,104 +760,383 @@ def _run_fairlogue_component3_for_result(
     rr: RunResult,
     df: pd.DataFrame,
     target: str,
-    protected: list[str],
-    features: list[str],
+    protected: Sequence[str],
+    features: Sequence[str],
     method: str = "sr",
     n_splits: int = 5,
     gen_null: bool = False,
     R_null: int = 100,
     bootstrap: str = "none",
     B: int = 100,
+    m_factor: float = 0.75,
     random_state: int = 42,
-):
+) -> Dict[str, Any]:
     """
     Run FairLogue Component 3 using the fitted FairModel attached
-    to a FairSelect result.
-    """
-    if getattr(rr, "fair_model", None) is None:
-        return {
-            "status": "skipped",
-            "reason": "RunResult has no fair_model attached.",
-        }
+    to a FairSelect RunResult.
 
-    fair_model = rr.fair_model
-    if getattr(rr, "test_index", None) is None:
+    The audit is restricted to the exact FairSelect held-out test
+    observations. The FairModel is already fitted and is not retrained.
+
+    Parameters
+    ----------
+    rr
+        FairSelect RunResult containing the fitted FairModel and exact
+        held-out test indices.
+
+    df
+        Filtered FairSelect cohort used to construct the split.
+
+    target
+        Binary outcome column.
+
+    protected
+        Protected-characteristic columns used by the FairModel.
+
+    features
+        Model covariates.
+
+    method
+        Component 3 estimator. Expected values are typically "sr"
+        or "dr".
+
+    n_splits
+        Component 3 cross-fitting setting. This may not be used by the
+        fixed-FairModel inference path but is retained in the Model
+        configuration.
+
+    gen_null
+        Whether to generate a permutation null distribution.
+
+    R_null
+        Number of null permutations.
+
+    bootstrap
+        Bootstrap mode, such as "none" or "rescaled".
+
+    B
+        Number of bootstrap draws.
+
+    m_factor
+        Rescaled-bootstrap exponent used to determine the bootstrap
+        sample size.
+
+    random_state
+        Reproducibility seed.
+    """
+    fair_model = getattr(
+        rr,
+        "fair_model",
+        None,
+    )
+
+    if fair_model is None:
         return {
             "status": "skipped",
             "component": "FairLogue Component 3",
             "reason": (
-                "RunResult has no test_index. Audit was not "
-                "run to avoid using training observations."
+                "RunResult has no fair_model attached."
             ),
         }
 
+    test_index = getattr(
+        rr,
+        "test_index",
+        None,
+    )
+
+    if test_index is None:
+        return {
+            "status": "skipped",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                "RunResult has no test_index. Component 3 was not "
+                "run to avoid auditing training observations."
+            ),
+        }
+
+    test_index = list(test_index)
+
     missing_test_indices = [
-        idx for idx in rr.test_index
-        if idx not in df.index
+        index
+        for index in test_index
+        if index not in df.index
     ]
 
     if missing_test_indices:
         return {
             "status": "failed",
             "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
             "reason": (
-                f"{len(missing_test_indices)} test indices "
-                "were not found in df."
+                f"{len(missing_test_indices)} stored test indices "
+                "were not found in the FairSelect DataFrame."
+            ),
+            "missing_test_indices": (
+                missing_test_indices[:20]
             ),
         }
 
-    audit_df = df.loc[rr.test_index].copy()
+    protected = list(protected)
+    features = list(features)
 
     if len(protected) < 2:
         return {
             "status": "skipped",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
             "reason": (
                 "Component 3 currently expects at least two "
                 "protected characteristics."
             ),
+        }
 
+    audit_df = df.loc[
+        test_index
+    ].copy()
+
+    if audit_df.empty:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                "The reconstructed FairSelect test set is empty."
+            ),
+        }
+
+    valid_methods = {
+        "sr",
+        "dr",
+    }
+
+    if method not in valid_methods:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                f"Unsupported Component 3 method {method!r}. "
+                f"Expected one of {sorted(valid_methods)}."
+            ),
+        }
+
+    valid_bootstrap_modes = {
+        "none",
+        "rescaled",
+    }
+
+    if bootstrap not in valid_bootstrap_modes:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                f"Unsupported bootstrap mode {bootstrap!r}. "
+                f"Expected one of "
+                f"{sorted(valid_bootstrap_modes)}."
+            ),
+        }
+
+    if gen_null and int(R_null) < 1:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                "R_null must be at least 1 when gen_null=True."
+            ),
+        }
+
+    if bootstrap != "none" and int(B) < 1:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                "B must be at least 1 when bootstrap is enabled."
+            ),
+        }
+
+    if not 0 < float(m_factor) <= 1:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                "m_factor must be greater than 0 and less than "
+                f"or equal to 1. Received {m_factor}."
+            ),
         }
 
     try:
         try:
-            from FairLogue.Component3.model import Model as Component3Model
-        except ImportError:
-            from combined_toolkits.FairLogue.Component3.model import (
-                Model as Component3Model
+            from FairLogue.Component3.model import (
+                Model as Component3Model,
             )
 
-        m_c3 = Component3Model(
+        except ImportError:
+            from combined_toolkits.FairLogue.Component3.model import (
+                Model as Component3Model,
+            )
+
+        component3_model = Component3Model(
             data=audit_df,
             outcome=target,
-            protected_characteristics=tuple(protected[:2]),
-            covariates=list(features),
+            protected_characteristics=tuple(
+                protected[:2]
+            ),
+            covariates=features,
             fair_model=fair_model,
             method=method,
             n_splits=n_splits,
             random_state=random_state,
         )
 
-        m_c3.pre_process_data()
+        component3_model.pre_process_data()
 
-        res = m_c3.fit_fairness_from_fairmodel(
-            cutoff=getattr(fair_model, "threshold", 0.5),
-            gen_null=gen_null,
-            R_null=R_null,
-            bootstrap=bootstrap,
-            B=B,
+        component3_results = (
+            component3_model.fit_fairness_from_fairmodel(
+                cutoff=getattr(
+                    fair_model,
+                    "threshold",
+                    0.5,
+                ),
+                gen_null=bool(gen_null),
+                R_null=int(R_null),
+                bootstrap=bootstrap,
+                B=int(B),
+                m_factor=float(m_factor),
+            )
         )
 
-        summary = m_c3.summarize()
+        summary = component3_model.summarize()
+
+        # Determine what actually ran from the returned result rather
+        # than assuming that requested inference completed.
+        null_applied = bool(
+            component3_results.get(
+                "gen_null_applied",
+                "table_null" in component3_results,
+            )
+        )
+
+        bootstrap_applied = bool(
+            component3_results.get(
+                "bootstrap_applied",
+                "boot_out" in component3_results,
+            )
+        )
 
         return {
             "status": "ok",
             "component": "FairLogue Component 3",
-            "audit_source": "FairSelect FairModel",
-            "model_name": getattr(fair_model, "name", rr.name),
+            "audit_source": (
+                "FairSelect fitted FairModel evaluated on the "
+                "held-out FairSelect test set"
+            ),
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
             "method": method,
-            "gen_null": gen_null,
-            "R_null": R_null,
-            "results": res,
+            "n_test": int(
+                len(audit_df)
+            ),
+            "test_index": test_index,
+
+            # Requested null settings
+            "gen_null_requested": bool(
+                gen_null
+            ),
+            "R_null_requested": int(
+                R_null
+            ),
+
+            # Actual null status
+            "gen_null_applied": (
+                null_applied
+            ),
+            "R_null_completed": (
+                component3_results.get(
+                    "R_null_completed",
+                    (
+                        int(R_null)
+                        if null_applied
+                        else 0
+                    ),
+                )
+            ),
+
+            # Requested bootstrap settings
+            "bootstrap_requested": (
+                bootstrap
+            ),
+            "B_requested": int(B),
+            "m_factor_requested": float(
+                m_factor
+            ),
+
+            # Actual bootstrap status
+            "bootstrap_applied": (
+                bootstrap_applied
+            ),
+            "B_completed": (
+                component3_results.get(
+                    "B_completed",
+                    (
+                        len(
+                            component3_results.get(
+                                "boot_out",
+                                [],
+                            )
+                        )
+                        if bootstrap_applied
+                        else 0
+                    ),
+                )
+            ),
+
+            # Preserve complete Component 3 outputs
+            "results": component3_results,
             "summary": summary,
         }
 
@@ -863,7 +1144,25 @@ def _run_fairlogue_component3_for_result(
         return {
             "status": "failed",
             "component": "FairLogue Component 3",
-            "model_name": getattr(fair_model, "name", rr.name),
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "method": method,
+            "gen_null_requested": bool(
+                gen_null
+            ),
+            "R_null_requested": int(
+                R_null
+            ),
+            "bootstrap_requested": (
+                bootstrap
+            ),
+            "B_requested": int(B),
+            "m_factor_requested": float(
+                m_factor
+            ),
             "error": str(exc),
             "traceback": traceback.format_exc(),
         }

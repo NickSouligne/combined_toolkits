@@ -24,6 +24,8 @@ def ensure_probabilistic_estimator(estimator, *, method: str = "isotonic", cv: i
     return CalibratedClassifierCV(estimator=estimator, method=method, cv=cv)
 
 
+
+
 class Model:
     """
     Estimator-agnostic fairness facade.
@@ -90,6 +92,7 @@ class Model:
         self._auto_compute_propensity = auto_compute_propensity
         self._calibration_method = calibration_method
         self._calibration_cv = calibration_cv
+        self._m_factor = m_factor
 
         self.fair_model = fair_model
 
@@ -155,6 +158,366 @@ class Model:
             calibration_method=self._calibration_method,
             calibration_cv=self._calibration_cv,
         )
+
+    def _prepare_fairmodel_scored_data(
+        self,
+        data: pd.DataFrame,
+        *,
+        groups_universe: Optional[List[str]] = None,
+    ) -> tuple[pd.DataFrame, List[str]]:
+        """
+        Generate counterfactual FairModel probabilities and hard decisions.
+
+        In DR mode, propensity scores are fitted on the supplied audit
+        population after the factual intersectional group column has been
+        constructed.
+        """
+        scored_data, observed_groups = (
+            self.build_scores_from_fairmodel(
+                fair_model=self.fair_model,
+                data=data,
+                group_col=self.A,
+                outcome_col=self.Y,
+            )
+        )
+
+        groups = sorted(
+            groups_universe
+            or observed_groups
+        )
+
+        if self._method == "dr":
+            # Recompute propensities for this exact audit/resampled dataset.
+            scored_data = (
+                Model.add_group_propensities_general(
+                    df=scored_data,
+                    covariates=self.covariates,
+                    group_col=self.A,
+                    estimator=self._propensity_estimator,
+                    random_state=self._random_state,
+                    calibration_method=(
+                        self._calibration_method
+                    ),
+                    calibration_cv=self._calibration_cv,
+                )
+            )
+
+            missing_propensity_columns = [
+                f"group_{group}_prob"
+                for group in groups
+                if (
+                    f"group_{group}_prob"
+                    not in scored_data.columns
+                )
+            ]
+
+            if missing_propensity_columns:
+                raise ValueError(
+                    "DR FairModel scoring did not generate all required "
+                    "propensity columns. Missing: "
+                    f"{missing_propensity_columns}"
+                )
+
+        return scored_data, groups
+
+    def _bootstrap_from_fairmodel(
+        self,
+        *,
+        data: pd.DataFrame,
+        tau: float,
+        groups_universe: List[str],
+        B: int,
+        m_factor: float,
+    ) -> List[Dict[str, float]]:
+        """
+        Rescaled, group-stratified bootstrap for an already-fitted FairModel.
+
+        The FairModel remains fixed. Audit observations are resampled within
+        factual intersectional groups, counterfactual scores are regenerated,
+        and Component 3 statistics are recomputed.
+        """
+        if B < 1:
+            raise ValueError(
+                f"B must be at least 1. Received {B}."
+            )
+
+        if not 0 < m_factor <= 1:
+            raise ValueError(
+                "m_factor must be in (0, 1]. "
+                f"Received {m_factor}."
+            )
+
+        base_data = data.copy()
+
+        base_data[self.A] = (
+            self.fair_model
+            .make_group(base_data)
+            .astype(str)
+        )
+
+        rng = np.random.default_rng(
+            self._random_state + 29
+        )
+
+        n_total = len(base_data)
+
+        if n_total == 0:
+            raise ValueError(
+                "Cannot bootstrap an empty audit dataset."
+            )
+
+        m_total = max(
+            len(groups_universe),
+            int(np.floor(n_total ** m_factor)),
+        )
+
+        factual_group_counts = (
+            base_data[self.A]
+            .value_counts()
+            .reindex(
+                groups_universe,
+                fill_value=0,
+            )
+        )
+
+        missing_factual_groups = factual_group_counts[
+            factual_group_counts == 0
+        ].index.tolist()
+
+        if missing_factual_groups:
+            raise ValueError(
+                "The audit dataset does not contain every group in the "
+                f"group universe: {missing_factual_groups}"
+            )
+
+        group_proportions = (
+            factual_group_counts
+            / factual_group_counts.sum()
+        )
+
+        requested_counts = np.floor(
+            group_proportions.to_numpy()
+            * m_total
+        ).astype(int)
+
+        # Guarantee at least one observation from each factual group.
+        requested_counts = np.maximum(
+            requested_counts,
+            1,
+        )
+
+        # Adjust exactly to m_total.
+        while requested_counts.sum() > m_total:
+            reducible = np.flatnonzero(
+                requested_counts > 1
+            )
+
+            if len(reducible) == 0:
+                break
+
+            position = reducible[
+                np.argmax(
+                    requested_counts[reducible]
+                )
+            ]
+
+            requested_counts[position] -= 1
+
+        while requested_counts.sum() < m_total:
+            expected = (
+                group_proportions.to_numpy()
+                * m_total
+            )
+
+            position = int(
+                np.argmax(
+                    expected - requested_counts
+                )
+            )
+
+            requested_counts[position] += 1
+
+        bootstrap_results = []
+
+        for bootstrap_number in range(B):
+            sampled_parts = []
+
+            for group, sample_count in zip(
+                groups_universe,
+                requested_counts,
+            ):
+                group_data = base_data.loc[
+                    base_data[self.A] == group
+                ]
+
+                sampled_positions = rng.choice(
+                    len(group_data),
+                    size=int(sample_count),
+                    replace=True,
+                )
+
+                sampled_parts.append(
+                    group_data.iloc[
+                        sampled_positions
+                    ]
+                )
+
+            bootstrap_data = (
+                pd.concat(
+                    sampled_parts,
+                    axis=0,
+                    ignore_index=True,
+                )
+                .sample(
+                    frac=1.0,
+                    random_state=(
+                        self._random_state
+                        + 1000
+                        + bootstrap_number
+                    ),
+                )
+                .reset_index(drop=True)
+            )
+
+            scored_bootstrap, _ = (
+                self._prepare_fairmodel_scored_data(
+                    bootstrap_data,
+                    groups_universe=groups_universe,
+                )
+            )
+
+            bootstrap_defs = get_defs_analysis(
+                data_with_mu=scored_bootstrap,
+                group_col=self.A,
+                outcome_col=self.Y,
+                tau=tau,
+                method=self._method,
+                groups_universe=groups_universe,
+            )
+
+            bootstrap_results.append(
+                bootstrap_defs
+            )
+
+        return bootstrap_results
+    
+    def _null_distribution_from_fairmodel(
+        self,
+        *,
+        data: pd.DataFrame,
+        tau: float,
+        groups_universe: List[str],
+        R_null: int,
+    ) -> Dict[str, List[float]]:
+        """
+        Generate a permutation null for a fixed, already-fitted FairModel.
+
+        Protected-characteristic vectors are permuted jointly across audit
+        observations. This breaks their association with covariates and
+        outcomes while preserving the observed joint protected-group
+        distribution.
+
+        The FairModel is not refitted.
+        """
+        if R_null < 1:
+            raise ValueError(
+                "R_null must be at least 1. "
+                f"Received {R_null}."
+            )
+
+        base_data = data.copy()
+
+        protected_columns = list(
+            self.fair_model.protected_cols
+        )
+
+        missing_protected = [
+            column
+            for column in protected_columns
+            if column not in base_data.columns
+        ]
+
+        if missing_protected:
+            raise ValueError(
+                "Cannot generate the FairModel null distribution because "
+                "protected columns are missing: "
+                f"{missing_protected}"
+            )
+
+        protected_values = (
+            base_data[protected_columns]
+            .to_numpy(copy=True)
+        )
+
+        rng = np.random.default_rng(
+            self._random_state + 13
+        )
+
+        null_rows = []
+
+        for permutation_number in range(R_null):
+            permuted_data = base_data.copy()
+
+            permutation = rng.permutation(
+                len(permuted_data)
+            )
+
+            # Permute the complete protected vector jointly.
+            permuted_data.loc[
+                :,
+                protected_columns,
+            ] = protected_values[
+                permutation
+            ]
+
+            # Rebuild the factual intersectional group after permutation.
+            permuted_data[self.A] = (
+                self.fair_model
+                .make_group(permuted_data)
+                .astype(str)
+            )
+
+            scored_permutation, _ = (
+                self._prepare_fairmodel_scored_data(
+                    permuted_data,
+                    groups_universe=groups_universe,
+                )
+            )
+
+            permutation_defs = get_defs_analysis(
+                data_with_mu=scored_permutation,
+                group_col=self.A,
+                outcome_col=self.Y,
+                tau=tau,
+                method=self._method,
+                groups_universe=groups_universe,
+            )
+
+            null_rows.append(
+                permutation_defs
+            )
+
+        all_keys = sorted(
+            set().union(
+                *[
+                    row.keys()
+                    for row in null_rows
+                ]
+            )
+        )
+
+        table_null = {
+            key: [
+                row.get(
+                    key,
+                    np.nan,
+                )
+                for row in null_rows
+            ]
+            for key in all_keys
+        }
+
+        return table_null
 
 
     @staticmethod
@@ -321,21 +684,80 @@ class Model:
     ):
         out = data.copy()
 
-        out[group_col] = fair_model.make_group(out)
-        groups = sorted(out[group_col].astype(str).unique())
+        out[group_col] = (
+            fair_model.make_group(out)
+            .astype(str)
+        )
 
-        for g in groups:
+        groups = sorted(
+            out[group_col].unique()
+        )
+
+        expected_parts = len(
+            fair_model.protected_cols
+        )
+
+        for group in groups:
+            parts = str(group).split("|")
+
+            if len(parts) != expected_parts:
+                raise ValueError(
+                    "Counterfactual group label cannot be "
+                    "mapped to the protected columns: "
+                    f"group={group!r}, "
+                    f"protected_cols="
+                    f"{fair_model.protected_cols}, "
+                    f"parts={parts}."
+                )
+
             df_cf = out.copy()
 
-            parts = str(g).split("|")
-            for col, val in zip(fair_model.protected_cols, parts):
-                df_cf[col] = val
+            for protected_column, value in zip(
+                fair_model.protected_cols,
+                parts,
+            ):
+                df_cf[protected_column] = value
 
-            out[f"muY_{g}"] = fair_model.predict_proba(df_cf)
-            out[f"S_{g}"] = fair_model.predict(df_cf)
+            probabilities = np.asarray(
+                fair_model.predict_proba(
+                    df_cf
+                ),
+                dtype=float,
+            ).ravel()
+
+            predictions = np.asarray(
+                fair_model.predict(
+                    df_cf
+                ),
+                dtype=int,
+            ).ravel()
+
+            if len(probabilities) != len(out):
+                raise RuntimeError(
+                    f"FairModel returned "
+                    f"{len(probabilities)} probabilities "
+                    f"for {len(out)} rows under "
+                    f"intervention {group!r}."
+                )
+
+            if len(predictions) != len(out):
+                raise RuntimeError(
+                    f"FairModel returned "
+                    f"{len(predictions)} predictions "
+                    f"for {len(out)} rows under "
+                    f"intervention {group!r}."
+                )
+
+            out[f"muY_{group}"] = (
+                probabilities
+            )
+
+            out[f"S_{group}"] = (
+                predictions
+            )
 
         return out, groups
-    
+        
 
     def fit_fairness_from_fairmodel(
         self,
@@ -346,37 +768,161 @@ class Model:
         B=500,
         m_factor=0.75,
     ):
+        """
+        Audit an already-fitted FairModel using FairLogue Component 3.
+
+        The FairModel is held fixed. Counterfactual probabilities and hard
+        predictions are generated through FairModel.predict_proba() and
+        FairModel.predict().
+
+        Optional inference
+        ------------------
+        gen_null=True
+            Generate a joint protected-characteristic permutation null.
+
+        bootstrap="rescaled"
+            Generate a group-stratified rescaled bootstrap over audit rows.
+
+        The FairModel itself is not refitted during either procedure.
+        """
         if self.fair_model is None:
-                raise ValueError("fair_model must be provided.")
+            raise ValueError(
+                "fair_model must be provided."
+            )
 
         if self.A not in self.data.columns:
-            raise RuntimeError("Call pre_process_data() before fit_fairness_from_fairmodel().")
+            raise RuntimeError(
+                "Call pre_process_data() before "
+                "fit_fairness_from_fairmodel()."
+            )
 
-        data_with_mu, groups = self.build_scores_from_fairmodel(
-            fair_model=self.fair_model,
-            data=self.data,
-            group_col=self.A,
-            outcome_col=self.Y
+        valid_bootstrap_options = {
+            "none",
+            "rescaled",
+        }
+
+        if bootstrap not in valid_bootstrap_options:
+            raise ValueError(
+                "bootstrap must be one of "
+                f"{sorted(valid_bootstrap_options)}. "
+                f"Received {bootstrap!r}."
+            )
+
+        audit_data = self.data.copy()
+
+        # Reconstruct the factual group through the FairModel so the exact
+        # same separator and protected-column ordering are used.
+        audit_data[self.A] = (
+            self.fair_model
+            .make_group(audit_data)
+            .astype(str)
         )
 
-        tau = float(cutoff) if cutoff is not None else float(self.fair_model.threshold)
+        groups_universe = sorted(
+            audit_data[self.A]
+            .unique()
+            .tolist()
+        )
+
+        # ---------------------------------------------------------
+        # Main observed estimate
+        # ---------------------------------------------------------
+        data_with_scores, groups = (
+            self._prepare_fairmodel_scored_data(
+                audit_data,
+                groups_universe=groups_universe,
+            )
+        )
+
+        tau = (
+            float(cutoff)
+            if cutoff is not None
+            else float(
+                getattr(
+                    self.fair_model,
+                    "threshold",
+                    0.5,
+                )
+            )
+        )
 
         defs = get_defs_analysis(
-            data_with_mu=data_with_mu,
+            data_with_mu=data_with_scores,
             group_col=self.A,
             outcome_col=self.Y,
             tau=tau,
             method=self._method,
-            groups_universe=groups,
+            groups_universe=groups_universe,
         )
 
-        self.results_ = {
+        results = {
             "defs": defs,
-            "est_choice": data_with_mu.copy(),
+            "est_choice": data_with_scores.copy(),
             "tau": tau,
             "groups": groups,
             "audit_source": "fair_model",
-            "fair_model_name": self.fair_model.name,
+            "fair_model_name": getattr(
+                self.fair_model,
+                "name",
+                type(self.fair_model).__name__,
+            ),
+            "method": self._method,
+            "gen_null_requested": bool(
+                gen_null
+            ),
+            "R_null_requested": int(
+                R_null
+            ),
+            "bootstrap_requested": (
+                bootstrap
+            ),
+            "B_requested": int(B),
+            "m_factor": float(m_factor),
         }
+
+        # ---------------------------------------------------------
+        # Permutation null
+        # ---------------------------------------------------------
+        if gen_null:
+            results["table_null"] = (
+                self._null_distribution_from_fairmodel(
+                    data=audit_data,
+                    tau=tau,
+                    groups_universe=groups_universe,
+                    R_null=int(R_null),
+                )
+            )
+
+            results["gen_null_applied"] = True
+            results["R_null_completed"] = int(
+                R_null
+            )
+
+        else:
+            results["gen_null_applied"] = False
+            results["R_null_completed"] = 0
+
+        # ---------------------------------------------------------
+        # Rescaled bootstrap
+        # ---------------------------------------------------------
+        if bootstrap == "rescaled":
+            results["boot_out"] = (
+                self._bootstrap_from_fairmodel(
+                    data=audit_data,
+                    tau=tau,
+                    groups_universe=groups_universe,
+                    B=int(B),
+                    m_factor=float(m_factor),
+                )
+            )
+
+            results["bootstrap_applied"] = True
+            results["B_completed"] = int(B)
+
+        else:
+            results["bootstrap_applied"] = False
+            results["B_completed"] = 0
+
+        self.results_ = results
 
         return self.results_
