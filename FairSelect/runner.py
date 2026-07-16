@@ -74,7 +74,9 @@ class PipelineConfig:
     protected: Sequence[str]
     features: Sequence[str]
     model_name: str
+    include_protected_features: bool = False
     model_params: Dict[str, Any] = field(default_factory=dict)
+    
 
     techniques: Sequence[str] = field(default_factory=list)
     run_baseline: bool = True
@@ -121,15 +123,24 @@ def _normalize_features(
     target: str,
     protected: Sequence[str],
     features: Sequence[str],
+    include_protected_features: bool = False,
 ) -> List[str]:
-    # Match GUI behavior: exclude target and protected from features. :contentReference[oaicite:3]{index=3}
-    f = [c for c in features if c != target and c not in protected]
-    if len(f) < 1:
-        raise ValueError("features must include at least one column not in target/protected.")
-    missing = [c for c in [*f, *protected, target] if c not in df.columns]
+    features = [column for column in features if column != target]
+
+    if include_protected_features:
+        features = list(dict.fromkeys([*features, *protected]))
+    else:
+        features = [column for column in features if column not in protected]
+
+    if not features:
+        raise ValueError("No model features remain after feature normalization.")
+
+    missing = [column for column in [*features, *protected, target] if column not in df.columns]
+
     if missing:
-        raise ValueError(f"Missing columns in df: {missing}")
-    return f
+        raise ValueError(f"Missing columns in df: {sorted(set(missing))}")
+
+    return features
 
 
 def _selected_dict(techniques: Sequence[str]) -> Dict[str, bool]:
@@ -150,7 +161,14 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
 
     target = cfg.target
     protected = list(cfg.protected)
-    features = list(cfg.features)
+
+    features = _normalize_features(
+        df=df,
+        target=target,
+        protected=protected,
+        features=cfg.features,
+        include_protected_features=cfg.include_protected_features,
+    )
 
     # ---------------------------------------------------------
     # Validate required columns
@@ -255,16 +273,16 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
         )
 
     else:
-        X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te = (
-            split_data(
-                df[[*features, *protected, cfg.target]],
-                cfg.target,
-                protected,
-                features,
-                test_size=cfg.test_size,
-                val_size=cfg.val_size,
-                random_state=cfg.random_state,
-            )
+        split_columns = list(dict.fromkeys([*features, *protected, cfg.target]))
+
+        X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te = split_data(
+            df[split_columns],
+            cfg.target,
+            protected,
+            features,
+            test_size=cfg.test_size,
+            val_size=cfg.val_size,
+            random_state=cfg.random_state,
         )
 
     # Keep full train (GUI does train+val concat)
@@ -412,6 +430,13 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
                         m_factor=cfg.fairlogue_comp3_m_factor
                     )
                 )
+    for result in results:
+        if result.fair_model is not None:
+            result.fair_model.metadata["include_protected_features"] = cfg.include_protected_features
+            result.fair_model.metadata["model_features"] = features
+            result.fair_model.metadata["protected_features_in_model"] = [
+                column for column in protected if column in features
+            ]
 
 
     return results
@@ -564,14 +589,7 @@ def _run_fairlogue_component1_for_result(
     )
 
     required_columns = list(
-        dict.fromkeys(
-            [
-                target,
-                protected_1,
-                protected_2,
-                *model_features,
-            ]
-        )
+        dict.fromkeys([target, protected_1, protected_2, *model_features])
     )
 
     missing_columns = [
@@ -824,6 +842,7 @@ def _run_fairlogue_component3_for_result(
     random_state
         Reproducibility seed.
     """
+
     fair_model = getattr(
         rr,
         "fair_model",
@@ -1017,13 +1036,16 @@ def _run_fairlogue_component3_for_result(
                 Model as Component3Model,
             )
 
+        model_features = list(getattr(fair_model, "features", features))
+        component3_covariates = [column for column in model_features if column not in protected]
+
         component3_model = Component3Model(
             data=audit_df,
             outcome=target,
             protected_characteristics=tuple(
                 protected[:2]
             ),
-            covariates=features,
+            covariates=component3_covariates,
             fair_model=fair_model,
             method=method,
             n_splits=n_splits,

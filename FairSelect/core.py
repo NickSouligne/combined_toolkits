@@ -405,19 +405,17 @@ def build_estimator(model_name, params=None):
     )
 
 
-def build_preprocessor(X: pd.DataFrame, drop_cols: List[str]) -> ColumnTransformer:
+def build_preprocessor(X: pd.DataFrame, drop_cols: List[str] | None = None, *, include_protected_features: bool = False) -> ColumnTransformer:
     """
     Build a sklearn ColumnTransformer that:
       - standardizes numeric features (z-score via StandardScaler)
       - one-hot encodes categorical features (OneHotEncoder)
       - optionally passes everything through unchanged if no transformers are needed.
 
-    Parameters
-    ----------
-    X : pd.DataFrame
-        Full input feature DataFrame, potentially including protected columns or target.
-    drop_cols : List[str]
-        Column names to exclude from preprocessing (e.g., target, protected attributes).
+    Build preprocessing for the columns already present in X.
+
+    Feature inclusion and exclusion are controlled by run_pipeline().
+    The drop_cols argument is retained for backward compatibility.
 
     Returns
     -------
@@ -425,23 +423,29 @@ def build_preprocessor(X: pd.DataFrame, drop_cols: List[str]) -> ColumnTransform
         A fitted-structure (not yet fit on data) that defines how to transform
         numeric vs categorical columns.
     """
-    #Identify feature columns by removing any protected / target columns
-    feat_cols = [c for c in X.columns if c not in drop_cols]
-    X_sub = X[feat_cols] #Subset to only feature columns
+    feat_cols = list(X.columns)
+    X_sub = X[feat_cols]
 
-    #Identify numeric columns to apply Standard Scalar too
     num_cols = X_sub.select_dtypes(include=[np.number]).columns.tolist()
-    #Any non-numeric columns are treated as categorical
-    cat_cols = [c for c in feat_cols if c not in num_cols]
-    transformers = [] #List of (name, transformer, columns) tuples
+    cat_cols = [column for column in feat_cols if column not in num_cols]
 
-    #Apply appropriate transformers
-    if len(num_cols) > 0:
+    transformers = []
+
+    if num_cols:
         transformers.append(("num", StandardScaler(), num_cols))
-    if len(cat_cols) > 0:
-        transformers.append(("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols))
+
+    if cat_cols:
+        transformers.append(
+            (
+                "cat",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                cat_cols,
+            )
+        )
+
     if not transformers:
         transformers.append(("num", "passthrough", feat_cols))
+
     return ColumnTransformer(transformers=transformers, remainder="drop")
 
 
