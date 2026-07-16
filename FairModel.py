@@ -340,8 +340,8 @@ class FairModel:
         )
 
         estimator = build_estimator(
-            model_type=model_type,
-            model_params=model_params,
+            model_name = model_type,
+            params = model_params,
         )
 
         X_train = train_df[features].copy()
