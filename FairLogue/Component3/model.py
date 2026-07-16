@@ -57,7 +57,7 @@ class Model:
         auto_compute_propensity: bool = True,
         calibration_method: str = "isotonic",
         calibration_cv: int = 3,
-        fair_model = None
+        fair_model = None,
     ):
         """
         Initialize configuration and hold data.
@@ -92,7 +92,6 @@ class Model:
         self._auto_compute_propensity = auto_compute_propensity
         self._calibration_method = calibration_method
         self._calibration_cv = calibration_cv
-        self._m_factor = m_factor
 
         self.fair_model = fair_model
 
