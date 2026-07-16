@@ -579,7 +579,7 @@ def run_prejudice_remover(model_name, params,
         print(f"[PR] aif360 import failed: {imp_err}\n"
               f"NumPy {np.__version__} @ {getattr(np,'__file__','n/a')}\n"
               f"sys.path[:5]={sys.path[:5]}", file=sys.stderr)
-        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train)
+        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=outcome_col)
 
     #--- Preprocess features (fit on train+val), force dense 2D ---
     #Build preprocessor on train+val
@@ -640,7 +640,7 @@ def run_prejudice_remover(model_name, params,
         )
     except Exception as ds_err:
         print(f"[PR] BinaryLabelDataset construction failed: {ds_err}", file=sys.stderr)
-        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train)
+        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=outcome_col)
 
     #Fit Prejudice Remover (Ran into some dependency issues here, need to fix properly later)
     try:
@@ -666,7 +666,7 @@ def run_prejudice_remover(model_name, params,
               {"numpy": np.__version__,
                "train_df_shape": df_tr.shape, "test_df_shape": df_te.shape,
                "train_head": df_tr.head(2).to_dict(orient="list")}, file=sys.stderr)
-        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train)
+        return run_baseline(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col=outcome_col)
 
     #Predict & evaluate
 
@@ -1766,7 +1766,7 @@ def run_reductions_meta(
 
 def run_baseline(model_name, params,
                  X_tr, X_va, X_te, y_tr, y_va, y_te,
-                 A_tr, A_va, A_te, protected_cols, all_df_train) -> RunResult:
+                 A_tr, A_va, A_te, protected_cols, all_df_train, outcome_col) -> RunResult:
     """
     Baseline pipeline with *no fairness interventions*.
 
