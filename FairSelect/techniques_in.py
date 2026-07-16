@@ -1803,6 +1803,7 @@ def run_baseline(model_name, params,
             "technique": "Baseline",
             "model_name": model_name,
             "model_params": params,
+            "outcome_col": outcome_col,
         },
     )
 
