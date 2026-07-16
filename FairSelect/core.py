@@ -39,20 +39,111 @@ def build_estimator(model_name: str, params: Dict[str, Any]):
     '''
     Reads the user inputs to the GUI and constructs the appropriate model object
     '''
-    if model_name == "Logistic Regression":
-        cw = params.get("class_weight", None)
+def build_estimator(model_name, params=None):
+    """
+    Build a classifier using a flexible model-name alias.
 
-        if cw == "None":
-            cw = None
+    Examples
+    --------
+    Logistic regression:
+        "Logistic Regression", "logistic", "logreg", "lr"
+
+    Neural network:
+        "Neural Network", "neural", "nn", "mlp"
+
+    Random forest:
+        "Random Forest", "random_forest", "rf"
+
+    Decision tree:
+        "Decision Tree", "decision_tree", "dt"
+
+    SVM:
+        "SVM", "SVC", "support vector machine"
+
+    XGBoost:
+        "XGBoost", "xgb"
+
+    LightGBM:
+        "LightGBM", "lgbm", "light gbm"
+    """
+    params = dict(params or {})
+
+    # Normalize capitalization, spaces, hyphens, and underscores.
+    normalized_name = (
+        str(model_name)
+        .strip()
+        .lower()
+        .replace("-", "_")
+        .replace(" ", "_")
+    )
+
+    # Collapse repeated underscores.
+    while "__" in normalized_name:
+        normalized_name = normalized_name.replace("__", "_")
+
+    model_aliases = {
+        # Logistic regression
+        "logistic_regression": "logistic_regression",
+        "logistic": "logistic_regression",
+        "logreg": "logistic_regression",
+        "lr": "logistic_regression",
+
+        # Neural network
+        "neural_network": "neural_network",
+        "neural": "neural_network",
+        "nn": "neural_network",
+        "mlp": "neural_network",
+        "mlpclassifier": "neural_network",
+
+        # Random forest
+        "random_forest": "random_forest",
+        "randomforest": "random_forest",
+        "rf": "random_forest",
+
+        # Decision tree
+        "decision_tree": "decision_tree",
+        "decisiontree": "decision_tree",
+        "dt": "decision_tree",
+
+        # Support vector machine
+        "svm": "svm",
+        "svc": "svm",
+        "support_vector_machine": "svm",
+        "support_vector_classifier": "svm",
+
+        # XGBoost
+        "xgboost": "xgboost",
+        "xgb": "xgboost",
+        "xgbclassifier": "xgboost",
+
+        # LightGBM
+        "lightgbm": "lightgbm",
+        "light_gbm": "lightgbm",
+        "lgbm": "lightgbm",
+        "lgbmclassifier": "lightgbm",
+    }
+
+    canonical_name = model_aliases.get(normalized_name)
+
+    if canonical_name is None:
+        supported_aliases = ", ".join(sorted(model_aliases))
+
+        raise ValueError(
+            f"Unknown model name: {model_name!r}. "
+            f"Supported names and aliases include: {supported_aliases}"
+        )
+
+    if canonical_name == "logistic_regression":
+        class_weight = params.get("class_weight")
+
+        if isinstance(class_weight, str) and class_weight.lower() == "none":
+            class_weight = None
 
         C_value = params.get("C", 1.0)
         if C_value is None:
             C_value = 1.0
 
-        # New scikit-learn parameterization:
-        # l1_ratio=0.0 gives pure L2 regularization.
         l1_ratio = params.get("l1_ratio", 0.0)
-
         if l1_ratio is None:
             l1_ratio = 0.0
 
@@ -61,79 +152,257 @@ def build_estimator(model_name: str, params: Dict[str, Any]):
             l1_ratio=float(l1_ratio),
             solver=params.get("solver", "lbfgs"),
             max_iter=int(params.get("max_iter", 200) or 200),
-            class_weight=cw,
-            random_state=params.get("random_state", None),
+            class_weight=class_weight,
+            random_state=params.get("random_state"),
         )
-    if model_name == "Neural Network":
-        hls = params.get("hidden_layer_sizes", None)
+
+    if canonical_name == "neural_network":
+        hidden_layer_sizes = params.get("hidden_layer_sizes")
+
+        if hidden_layer_sizes is None:
+            hidden_layer_sizes = (100,)
+        elif isinstance(hidden_layer_sizes, list):
+            hidden_layer_sizes = tuple(hidden_layer_sizes)
+        elif isinstance(hidden_layer_sizes, int):
+            hidden_layer_sizes = (hidden_layer_sizes,)
+
+        alpha = params.get("alpha", 0.0001)
+        if alpha is None:
+            alpha = 0.0001
+
+        max_iter = params.get("max_iter", 200)
+        if max_iter is None:
+            max_iter = 200
+
         return MLPClassifier(
-            hidden_layer_sizes=hls if hls is not None else (100,),
+            hidden_layer_sizes=hidden_layer_sizes,
             activation=params.get("activation", "relu"),
             solver=params.get("solver", "adam"),
-            alpha=params.get("alpha", 0.0001) if params.get("alpha", 0.0001) is not None else 0.0001,
-            learning_rate=params.get("learning_rate", "constant"),
-            max_iter=params.get("max_iter", 200) if params.get("max_iter", 200) is not None else 200,
-            random_state=params.get("random_state", None)
+            alpha=float(alpha),
+            learning_rate=params.get(
+                "learning_rate",
+                "constant",
+            ),
+            max_iter=int(max_iter),
+            random_state=params.get("random_state"),
         )
-    if model_name == "Random Forest":
-        mf = params.get("max_features", "sqrt")
-        if mf == "None": mf = None
-        cw = params.get("class_weight", "None")
-        if cw == "None": cw = None
+
+    if canonical_name == "random_forest":
+        max_features = params.get("max_features", "sqrt")
+
+        if (
+            isinstance(max_features, str)
+            and max_features.lower() == "none"
+        ):
+            max_features = None
+
+        class_weight = params.get("class_weight")
+
+        if (
+            isinstance(class_weight, str)
+            and class_weight.lower() == "none"
+        ):
+            class_weight = None
+
         return RandomForestClassifier(
-            n_estimators=params.get("n_estimators", 200) or 200,
-            max_depth=params.get("max_depth", None),
-            min_samples_split=params.get("min_samples_split", 2) or 2,
-            min_samples_leaf=params.get("min_samples_leaf", 1) or 1,
-            max_features=mf,
-            class_weight=cw,
-            random_state=params.get("random_state", None)
+            n_estimators=int(
+                params.get("n_estimators", 200) or 200
+            ),
+            max_depth=params.get("max_depth"),
+            min_samples_split=int(
+                params.get("min_samples_split", 2) or 2
+            ),
+            min_samples_leaf=int(
+                params.get("min_samples_leaf", 1) or 1
+            ),
+            max_features=max_features,
+            class_weight=class_weight,
+            random_state=params.get("random_state"),
+            n_jobs=params.get("n_jobs", -1),
         )
-    if model_name == "Decision Tree":
-        mf = params.get("max_features", "None")
-        if mf == "None": mf = None
+
+    if canonical_name == "decision_tree":
+        max_features = params.get("max_features")
+
+        if (
+            isinstance(max_features, str)
+            and max_features.lower() == "none"
+        ):
+            max_features = None
+
         return DecisionTreeClassifier(
             criterion=params.get("criterion", "gini"),
-            max_depth=params.get("max_depth", None),
-            min_samples_split=params.get("min_samples_split", 2) or 2,
-            min_samples_leaf=params.get("min_samples_leaf", 1) or 1,
-            max_features=mf,
-            random_state=params.get("random_state", None)
+            max_depth=params.get("max_depth"),
+            min_samples_split=int(
+                params.get("min_samples_split", 2) or 2
+            ),
+            min_samples_leaf=int(
+                params.get("min_samples_leaf", 1) or 1
+            ),
+            max_features=max_features,
+            class_weight=(
+                None
+                if str(
+                    params.get("class_weight", "none")
+                ).lower() == "none"
+                else params.get("class_weight")
+            ),
+            random_state=params.get("random_state"),
         )
-    if model_name == "SVM":
+
+    if canonical_name == "svm":
+        C_value = params.get("C", 1.0)
+        if C_value is None:
+            C_value = 1.0
+
+        degree = params.get("degree", 3)
+        if degree is None:
+            degree = 3
+
+        class_weight = params.get("class_weight")
+
+        if (
+            isinstance(class_weight, str)
+            and class_weight.lower() == "none"
+        ):
+            class_weight = None
+
+        probability = params.get("probability", True)
+
+        # Avoid bool("False") evaluating to True.
+        if isinstance(probability, str):
+            probability = probability.strip().lower() in {
+                "true",
+                "1",
+                "yes",
+                "y",
+            }
+
         return SVC(
             kernel=params.get("kernel", "rbf"),
-            C=params.get("C", 1.0) if params.get("C", 1.0) is not None else 1.0,
+            C=float(C_value),
             gamma=params.get("gamma", "scale"),
-            degree=params.get("degree", 3) if params.get("degree", 3) is not None else 3,
-            probability=bool(params.get("probability", True))
+            degree=int(degree),
+            probability=bool(probability),
+            class_weight=class_weight,
+            random_state=params.get("random_state"),
         )
-    if model_name == "XGBoost" and XGB_OK:
+
+    if canonical_name == "xgboost":
+        if not XGB_OK:
+            raise ImportError(
+                "XGBoost was requested, but xgboost is not installed "
+                "or could not be imported."
+            )
+
         return XGBClassifier(
-            n_estimators=params.get("n_estimators", 300) or 300,
-            max_depth=params.get("max_depth", 6) if params.get("max_depth", 6) is not None else 6,
-            learning_rate=params.get("learning_rate", 0.1) if params.get("learning_rate", 0.1) is not None else 0.1,
-            subsample=params.get("subsample", 1.0) if params.get("subsample", 1.0) is not None else 1.0,
-            colsample_bytree=params.get("colsample_bytree", 1.0) if params.get("colsample_bytree", 1.0) is not None else 1.0,
-            reg_alpha=params.get("reg_alpha", 0.0) if params.get("reg_alpha", 0.0) is not None else 0.0,
-            reg_lambda=params.get("reg_lambda", 1.0) if params.get("reg_lambda", 1.0) is not None else 1.0,
-            random_state=params.get("random_state", None),
-            use_label_encoder=False,
-            eval_metric="logloss"
+            n_estimators=int(
+                params.get("n_estimators", 300) or 300
+            ),
+            max_depth=int(
+                params.get("max_depth", 6)
+                if params.get("max_depth", 6) is not None
+                else 6
+            ),
+            learning_rate=float(
+                params.get("learning_rate", 0.1)
+                if params.get("learning_rate", 0.1) is not None
+                else 0.1
+            ),
+            subsample=float(
+                params.get("subsample", 1.0)
+                if params.get("subsample", 1.0) is not None
+                else 1.0
+            ),
+            colsample_bytree=float(
+                params.get("colsample_bytree", 1.0)
+                if params.get("colsample_bytree", 1.0) is not None
+                else 1.0
+            ),
+            reg_alpha=float(
+                params.get("reg_alpha", 0.0)
+                if params.get("reg_alpha", 0.0) is not None
+                else 0.0
+            ),
+            reg_lambda=float(
+                params.get("reg_lambda", 1.0)
+                if params.get("reg_lambda", 1.0) is not None
+                else 1.0
+            ),
+            random_state=params.get("random_state"),
+            n_jobs=params.get("n_jobs", -1),
+            eval_metric=params.get(
+                "eval_metric",
+                "logloss",
+            ),
         )
-    if model_name == "LightGBM" and LGBM_OK:
+
+    if canonical_name == "lightgbm":
+        if not LGBM_OK:
+            raise ImportError(
+                "LightGBM was requested, but lightgbm is not installed "
+                "or could not be imported."
+            )
+
         return LGBMClassifier(
-            n_estimators=params.get("n_estimators", 300) or 300,
-            max_depth=params.get("max_depth", -1) if params.get("max_depth", -1) is not None else -1,
-            learning_rate=params.get("learning_rate", 0.05) if params.get("learning_rate", 0.05) is not None else 0.05,
-            num_leaves=params.get("num_leaves", 31) if params.get("num_leaves", 31) is not None else 31,
-            subsample=params.get("subsample", 1.0) if params.get("subsample", 1.0) is not None else 1.0,
-            colsample_bytree=params.get("colsample_bytree", 1.0) if params.get("colsample_bytree", 1.0) is not None else 1.0,
-            reg_alpha=params.get("reg_alpha", 0.0) if params.get("reg_alpha", 0.0) is not None else 0.0,
-            reg_lambda=params.get("reg_lambda", 0.0) if params.get("reg_lambda", 0.0) is not None else 0.0,
-            random_state=params.get("random_state", None)
+            n_estimators=int(
+                params.get("n_estimators", 300) or 300
+            ),
+            max_depth=int(
+                params.get("max_depth", -1)
+                if params.get("max_depth", -1) is not None
+                else -1
+            ),
+            learning_rate=float(
+                params.get("learning_rate", 0.05)
+                if params.get("learning_rate", 0.05) is not None
+                else 0.05
+            ),
+            num_leaves=int(
+                params.get("num_leaves", 31)
+                if params.get("num_leaves", 31) is not None
+                else 31
+            ),
+            subsample=float(
+                params.get("subsample", 1.0)
+                if params.get("subsample", 1.0) is not None
+                else 1.0
+            ),
+            colsample_bytree=float(
+                params.get("colsample_bytree", 1.0)
+                if params.get("colsample_bytree", 1.0) is not None
+                else 1.0
+            ),
+            reg_alpha=float(
+                params.get("reg_alpha", 0.0)
+                if params.get("reg_alpha", 0.0) is not None
+                else 0.0
+            ),
+            reg_lambda=float(
+                params.get("reg_lambda", 0.0)
+                if params.get("reg_lambda", 0.0) is not None
+                else 0.0
+            ),
+            class_weight=(
+                None
+                if str(
+                    params.get("class_weight", "none")
+                ).lower() == "none"
+                else params.get("class_weight")
+            ),
+            random_state=params.get("random_state"),
+            n_jobs=params.get("n_jobs", -1),
+            verbosity=int(
+                params.get("verbosity", -1)
+                if params.get("verbosity", -1) is not None
+                else -1
+            ),
         )
-    raise ValueError(f"Unknown or unavailable model: {model_name}")
+
+    # This should be unreachable because aliases are validated above.
+    raise RuntimeError(
+        f"No estimator builder exists for {canonical_name!r}."
+    )
 
 
 def build_preprocessor(X: pd.DataFrame, drop_cols: List[str]) -> ColumnTransformer:
