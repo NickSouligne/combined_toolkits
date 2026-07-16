@@ -1,3 +1,4 @@
+from __future__ import annotations
 import numpy as np
 import pandas as pd
 import FairLogue as ift
@@ -5,7 +6,7 @@ import FairLogue as ift
 from FairLogue.Component1 import _compute_group_rates
 from FairLogue.Component3 import FairnessPipeline
 
-from __future__ import annotations
+
 
 from typing import Sequence, Dict, Any
 
