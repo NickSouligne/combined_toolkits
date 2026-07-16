@@ -307,7 +307,7 @@ class FairModel:
         """
 
         from FairSelect.core import build_estimator, build_preprocessor
-        
+
         features = [
             col for col in features
             if col != outcome_col
@@ -339,10 +339,9 @@ class FairModel:
             dense_output=dense_output,
         )
 
-        estimator = cls.build_estimator(
+        estimator = build_estimator(
             model_type=model_type,
             model_params=model_params,
-            random_state=random_state,
         )
 
         X_train = train_df[features].copy()
