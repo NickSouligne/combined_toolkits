@@ -111,7 +111,7 @@ class Model:
             raise ValueError("A1 or A2 not found in data columns.")
 
         #intersectional label
-        self.data[self.A] = self.data[self.A1].astype(str) + self.data[self.A2].astype(str)
+        self.data[self.A] = (self.data[self.A1].astype(str) + "|" + self.data[self.A2].astype(str))
 
         #default covariates if not provided: numeric columns except protected + Y + D + A1A2
         if not self.covariates:
