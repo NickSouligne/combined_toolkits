@@ -400,53 +400,45 @@ class Model:
 
         return bootstrap_results
     
-
-    def refit_null_pipeline(
-        *,
-        train_df,
-        validation_df,
-        random_state,
-    ):
-        return fit_combined_fairmodel(
-            train_df=train_df,
-            validation_df=validation_df,
-
-            outcome_col=OUTCOME_COL,
-            features=FEATURES,
-            protected_cols=PROTECTED_COLUMNS,
-
-            model_name="Random Forest",
-            model_params=BEST_MODEL_PARAMS,
-
-            pre_technique="Outcome-Group Reweighting",
-            pre_params=REWEIGHT_PARAMS,
-
-            in_technique="Exponentiated Gradient Reduction",
-            in_params=EG_PARAMS,
-
-            post_technique="Reject-Option Threshold",
-            post_params=REJECT_OPTION_PARAMS,
-
-            random_state=random_state,
-        )
-    
+    @staticmethod
     def _jointly_permute_protected(
-        df,
-        protected_cols,
-        rng,
-    ):
+        df: pd.DataFrame,
+        protected_cols: List[str],
+        rng: np.random.Generator,
+    ) -> pd.DataFrame:
+        """
+        Jointly permute complete protected-characteristic vectors while
+        preserving row indices, outcomes, covariates, and split membership.
+        """
         out = df.copy()
 
-        permutation = rng.permutation(len(out))
+        missing_columns = [
+            column
+            for column in protected_cols
+            if column not in out.columns
+        ]
+
+        if missing_columns:
+            raise ValueError(
+                "Cannot jointly permute protected characteristics "
+                f"because columns are missing: {missing_columns}"
+            )
 
         protected_values = (
             out[protected_cols]
             .to_numpy(copy=True)
         )
 
-        out.loc[:, protected_cols] = (
-            protected_values[permutation]
+        permutation = rng.permutation(
+            len(out)
         )
+
+        out.loc[
+            :,
+            protected_cols,
+        ] = protected_values[
+            permutation
+        ]
 
         return out
     
@@ -503,11 +495,9 @@ class Model:
             Dict[str, float]
         ] = []
 
-        for permutation_number in range(
-            int(R_null)
-        ):
+        for permutation_number in range(int(R_null)):
             permuted_source = (
-                _jointly_permute_protected(
+                self._jointly_permute_protected(
                     source_data,
                     protected_columns,
                     rng,
