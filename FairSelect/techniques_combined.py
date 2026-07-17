@@ -172,8 +172,7 @@ def run_combined_pipeline(model_name, params,
             #Wrap the estimator in a ExponentiatedGradient with EO constraints (modifies the gradient of the steps during training to enforce EO)
             eg = ExponentiatedGradient(
                 estimator=base,
-                constraints=EqualizedOdds(),
-                random_state=technique_random_state,
+                constraints=EqualizedOdds()
             )
             #Fit the training data using group labels as senstive features
             eg.fit(Xfit, yfit, sensitive_features=Atr)
