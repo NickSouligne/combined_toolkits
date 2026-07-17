@@ -84,7 +84,7 @@ def bs_rescaled_analysis(
     group_col: str,
     outcome_col: str,
     covariates: List[str],
-    B: int = 5, #default should be 500, changing for testing
+    B: int = 200, #default should be 500, changing for testing
     m_factor: float = 0.75,
     model: Optional[ProbaEstimator] = None,
     model_type: str = "rf",

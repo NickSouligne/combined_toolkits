@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import traceback
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+from copy import deepcopy
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Union, Callable
 from .utils import confusion_rates, filter_intersectional_groups
 from FairLogue.Component1.intersectional_metrics import (
     evaluate_intersectional_fairness,
@@ -11,7 +12,7 @@ from FairLogue.Component1.intersectional_metrics import (
 import pandas as pd
 from FairModel import FairModel
 
-from .core import RunResult, split_data
+from .core import RunResult, split_data, FairSelectPlanSpec
 
 from .techniques_pre import run_reweighting, run_smote_or_ros, run_local_massaging
 from .techniques_in import (
@@ -146,6 +147,402 @@ def _normalize_features(
 def _selected_dict(techniques: Sequence[str]) -> Dict[str, bool]:
     s = set(techniques)
     return {k: (k in s) for k in ALL_TECHNIQUES}
+
+def _execute_fairselect_plan(
+    *,
+    plan_type: str,
+    technique: Optional[str],
+    selected: Dict[str, bool],
+    model_name: str,
+    model_params: Dict[str, Any],
+    X_tr: pd.DataFrame,
+    X_va: pd.DataFrame,
+    X_te: pd.DataFrame,
+    y_tr: pd.Series,
+    y_va: pd.Series,
+    y_te: pd.Series,
+    A_tr: pd.Series,
+    A_va: pd.Series,
+    A_te: pd.Series,
+    protected: Sequence[str],
+    all_df_train: pd.DataFrame,
+    outcome_col: str,
+) -> RunResult:
+    """
+    Execute exactly one FairSelect plan.
+
+    This is the sole dispatch point used by both the observed pipeline
+    and Component 3 permutation-null refits.
+    """
+    protected = list(protected)
+    params = deepcopy(model_params)
+
+    common_args = (
+        model_name,
+        params,
+        X_tr,
+        X_va,
+        X_te,
+        y_tr,
+        y_va,
+        y_te,
+        A_tr,
+        A_va,
+        A_te,
+        protected,
+        all_df_train,
+    )
+
+    if plan_type == "baseline":
+        return run_baseline(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if plan_type == "combined":
+        return run_combined_pipeline(
+            *common_args,
+            selected=dict(selected),
+            outcome_col=outcome_col,
+        )
+
+    if plan_type != "single":
+        raise ValueError(
+            "plan_type must be one of "
+            "{'baseline', 'single', 'combined'}. "
+            f"Received {plan_type!r}."
+        )
+
+    if technique is None:
+        raise ValueError(
+            "A single-technique plan requires technique."
+        )
+
+    if technique == "Pre:Reweight (y,a)":
+        return run_reweighting(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Pre:SMOTE / Oversample":
+        return run_smote_or_ros(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Pre:Local Massaging":
+        return run_local_massaging(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "In:Compositional per-group":
+        return run_compositional_models(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "In:Ensemble (K=5)":
+        return run_group_balanced_ensemble(
+            model_name,
+            params,
+            5,
+            X_tr,
+            X_va,
+            X_te,
+            y_tr,
+            y_va,
+            y_te,
+            A_tr,
+            A_va,
+            A_te,
+            protected,
+            all_df_train,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "In:Multicalibration (isotonic)":
+        return run_multicalibration(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "In:Reductions (EO)":
+        return run_reductions_meta(
+            *common_args,
+            constraint="EO",
+        )
+
+    if (
+        technique
+        == "In:Fairness Regularization (Prejudice Remover)"
+    ):
+        return run_prejudice_remover(
+            *common_args,
+            eta=25.0,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Post:Youden per group":
+        return run_group_youden_postproc(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Post:Multiaccuracy Boost":
+        return run_multiaccuracy_boost(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Post:Reject-Option Shift":
+        return run_reject_option_shift(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Post:Input Repair":
+        return run_input_repair(
+            *common_args,
+            outcome_col=outcome_col,
+        )
+
+    if technique == "Post:Reject-Option Kamiran":
+        return run_reject_option_kamiran(
+            *common_args,
+            fairness_objective="eod",
+            fairness_bound=0.05,
+            max_acc_drop=0.02,
+            outcome_col=outcome_col,
+        )
+
+    raise ValueError(
+        f"Unsupported FairSelect technique: {technique!r}."
+    )
+
+
+def _attach_refit_spec(
+        result: RunResult,
+        spec: FairSelectPlanSpec,
+    ) -> RunResult:
+        result.refit_spec = spec
+
+        if result.fair_model is not None:
+            result.fair_model.refit_spec = spec
+
+            result.fair_model.metadata[
+                "fairselect_plan_type"
+            ] = spec.plan_type
+
+            result.fair_model.metadata[
+                "fairselect_technique"
+            ] = spec.technique
+
+            result.fair_model.metadata[
+                "fairselect_selected"
+            ] = spec.selected_dict()
+
+        return result
+
+def refit_fairmodel_from_spec(
+    *,
+    df: pd.DataFrame,
+    spec: FairSelectPlanSpec,
+    random_state: int,
+) -> FairModel:
+    """
+    Refit one exact FairSelect plan on a supplied DataFrame.
+
+    The DataFrame is expected to contain the same row indices and columns
+    as the cohort used for the observed fit. Protected characteristics may
+    have been permuted by FairLogue Component 3.
+    """
+    required_columns = list(
+        dict.fromkeys(
+            [
+                *spec.features,
+                *spec.protected,
+                spec.target,
+            ]
+        )
+    )
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "The null-refit DataFrame is missing columns: "
+            f"{missing_columns}"
+        )
+
+    required_indices = [
+        *spec.train_index,
+        *spec.validation_index,
+        *spec.test_index,
+    ]
+
+    missing_indices = [
+        index
+        for index in required_indices
+        if index not in df.index
+    ]
+
+    if missing_indices:
+        raise ValueError(
+            "The null-refit DataFrame is missing stored split "
+            f"indices: {missing_indices[:20]}"
+        )
+
+    features = list(spec.features)
+    protected = list(spec.protected)
+
+    X_tr = df.loc[
+        list(spec.train_index),
+        features,
+    ].copy()
+
+    X_va = df.loc[
+        list(spec.validation_index),
+        features,
+    ].copy()
+
+    X_te = df.loc[
+        list(spec.test_index),
+        features,
+    ].copy()
+
+    y_tr = df.loc[
+        list(spec.train_index),
+        spec.target,
+    ].copy()
+
+    y_va = df.loc[
+        list(spec.validation_index),
+        spec.target,
+    ].copy()
+
+    y_te = df.loc[
+        list(spec.test_index),
+        spec.target,
+    ].copy()
+
+    A_tr = (
+        df.loc[
+            list(spec.train_index),
+            protected,
+        ]
+        .astype(str)
+        .agg("|".join, axis=1)
+    )
+
+    A_va = (
+        df.loc[
+            list(spec.validation_index),
+            protected,
+        ]
+        .astype(str)
+        .agg("|".join, axis=1)
+    )
+
+    A_te = (
+        df.loc[
+            list(spec.test_index),
+            protected,
+        ]
+        .astype(str)
+        .agg("|".join, axis=1)
+    )
+
+    all_df_train = pd.concat(
+        [X_tr, X_va],
+        axis=0,
+    )
+
+    model_params = deepcopy(
+        dict(spec.model_params)
+    )
+
+    # All model builders should receive the null-replication seed.
+    model_params["random_state"] = int(random_state)
+
+    result = _execute_fairselect_plan(
+        plan_type=spec.plan_type,
+        technique=spec.technique,
+        selected=spec.selected_dict(),
+        model_name=spec.model_name,
+        model_params=model_params,
+        X_tr=X_tr,
+        X_va=X_va,
+        X_te=X_te,
+        y_tr=y_tr,
+        y_va=y_va,
+        y_te=y_te,
+        A_tr=A_tr,
+        A_va=A_va,
+        A_te=A_te,
+        protected=protected,
+        all_df_train=all_df_train,
+        outcome_col=spec.target,
+    )
+
+    if result.fair_model is None:
+        raise RuntimeError(
+            "The refitted FairSelect plan did not return a FairModel."
+        )
+
+    result.refit_spec = spec
+    result.fair_model.refit_spec = spec
+
+    result.fair_model.metadata[
+        "component3_null_refit"
+    ] = True
+
+    result.fair_model.metadata[
+        "component3_null_random_state"
+    ] = int(random_state)
+
+    return result.fair_model
+
+
+
+def _make_refit_spec(
+        *,
+        plan_type: str,
+        technique: Optional[str],
+        selected: Dict[str, bool],
+        cfg: PipelineConfig,
+        features: Sequence[str],
+        protected: Sequence[str],
+        train_index: Sequence[Any],
+        validation_index: Sequence[Any],
+        test_index: Sequence[Any],
+    ) -> FairSelectPlanSpec:
+        return FairSelectPlanSpec(
+            plan_type=str(plan_type),
+            technique=technique,
+            selected=tuple(
+                (key, bool(selected.get(key, False)))
+                for key in ALL_TECHNIQUES
+            ),
+            model_name=str(cfg.model_name),
+            model_params=deepcopy(
+                dict(cfg.model_params)
+            ),
+            target=str(cfg.target),
+            protected=tuple(protected),
+            features=tuple(features),
+            include_protected_features=bool(
+                cfg.include_protected_features
+            ),
+            train_index=tuple(train_index),
+            validation_index=tuple(validation_index),
+            test_index=tuple(test_index),
+            random_state=int(cfg.random_state),
+        )
 
 
 def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
@@ -293,71 +690,74 @@ def run_pipeline(cfg: PipelineConfig) -> List[RunResult]:
 
     results: List[RunResult] = []
 
-    # Baseline
-    if cfg.run_baseline:
+    selected = _selected_dict(
+        cfg.techniques
+    )
+
+    actual_train_index = list(X_tr.index)
+    actual_validation_index = list(X_va.index)
+    actual_test_index = list(X_te.index)
+
+    def add_plan_result(
+        *,
+        plan_type: str,
+        technique: Optional[str] = None,
+    ) -> None:
+        result = _execute_fairselect_plan(
+            plan_type=plan_type,
+            technique=technique,
+            selected=selected,
+            model_name=model_name,
+            model_params=params,
+            X_tr=X_tr,
+            X_va=X_va,
+            X_te=X_te,
+            y_tr=y_tr,
+            y_va=y_va,
+            y_te=y_te,
+            A_tr=A_tr,
+            A_va=A_va,
+            A_te=A_te,
+            protected=protected,
+            all_df_train=all_df_train,
+            outcome_col=cfg.target,
+        )
+
+        spec = _make_refit_spec(
+            plan_type=plan_type,
+            technique=technique,
+            selected=selected,
+            cfg=cfg,
+            features=features,
+            protected=protected,
+            train_index=actual_train_index,
+            validation_index=actual_validation_index,
+            test_index=actual_test_index,
+        )
+
         results.append(
-            run_baseline(
-                model_name, params,
-                X_tr, X_va, X_te, y_tr, y_va, y_te,
-                A_tr, A_va, A_te,
-                protected, all_df_train, outcome_col=cfg.target,
+            _attach_refit_spec(
+                result,
+                spec,
             )
         )
 
-    # Technique dispatch mirrors GUI exactly.
-    selected = _selected_dict(cfg.techniques)
-
-    # Pre
-    if selected["Pre:Reweight (y,a)"]:
-        results.append(run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["Pre:SMOTE / Oversample"]:
-        results.append(run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["Pre:Local Massaging"]:
-        results.append(run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-
-    # In
-    if selected["In:Compositional per-group"]:
-        results.append(run_compositional_models(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["In:Ensemble (K=5)"]:
-        results.append(run_group_balanced_ensemble(model_name, params, 5, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["In:Multicalibration (isotonic)"]:
-        results.append(run_multicalibration(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["In:Reductions (EO)"]:
-        results.append(run_reductions_meta(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, constraint="EO"))
-    if selected["In:Fairness Regularization (Prejudice Remover)"]:
-        results.append(run_prejudice_remover(
-            model_name, params,
-            X_tr, X_va, X_te, y_tr, y_va, y_te,
-            A_tr, A_va, A_te,
-            protected, all_df_train,
-            eta=25.0,
-            outcome_col=cfg.target
-        ))
-
-    # Post
-    if selected["Post:Youden per group"]:
-        results.append(run_group_youden_postproc(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["Post:Multiaccuracy Boost"]:
-        results.append(run_multiaccuracy_boost(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["Post:Reject-Option Shift"]:
-        results.append(run_reject_option_shift(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["Post:Input Repair"]:
-        results.append(run_input_repair(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, outcome_col=cfg.target))
-    if selected["Post:Reject-Option Kamiran"]:
-        results.append(run_reject_option_kamiran(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr, A_va, A_te, protected, all_df_train, fairness_objective="eod", 
-                                                 fairness_bound=0.05, max_acc_drop=0.02, outcome_col=cfg.target))
-
-    # Combined
-    if cfg.run_combined:
-        combined_rr = run_combined_pipeline(
-            model_name, params,
-            X_tr, X_va, X_te, y_tr, y_va, y_te,
-            A_tr, A_va, A_te,
-            protected, all_df_train,
-            selected=selected,
-            outcome_col=cfg.target
+    if cfg.run_baseline:
+        add_plan_result(
+            plan_type="baseline",
         )
-        results.append(combined_rr)
+
+    for technique in ALL_TECHNIQUES:
+        if selected.get(technique, False):
+            add_plan_result(
+                plan_type="single",
+                technique=technique,
+            )
+
+    if cfg.run_combined:
+        add_plan_result(
+            plan_type="combined",
+        )
     
     for result in results:
         if getattr(result, "test_index", None) is None:
@@ -849,6 +1249,34 @@ def _run_fairlogue_component3_for_result(
         None,
     )
 
+    refit_spec = getattr(
+        rr,
+        "refit_spec",
+        None,
+    )
+
+    if refit_spec is None:
+        refit_spec = getattr(
+            fair_model,
+            "refit_spec",
+            None,
+        )
+
+    if gen_null and refit_spec is None:
+        return {
+            "status": "failed",
+            "component": "FairLogue Component 3",
+            "model_name": getattr(
+                fair_model,
+                "name",
+                rr.name,
+            ),
+            "reason": (
+                "A refitted Component 3 null was requested, but "
+                "the FairModel has no FairSelectPlanSpec."
+            ),
+        }
+
     if fair_model is None:
         return {
             "status": "skipped",
@@ -1054,6 +1482,16 @@ def _run_fairlogue_component3_for_result(
 
         component3_model.pre_process_data()
 
+        def null_refit_fn(
+            permuted_df: pd.DataFrame,
+            null_random_state: int,
+        ) -> FairModel:
+            return refit_fairmodel_from_spec(
+                df=permuted_df,
+                spec=refit_spec,
+                random_state=null_random_state,
+            )
+
         component3_results = (
             component3_model.fit_fairness_from_fairmodel(
                 cutoff=getattr(
@@ -1066,6 +1504,21 @@ def _run_fairlogue_component3_for_result(
                 bootstrap=bootstrap,
                 B=int(B),
                 m_factor=float(m_factor),
+                null_source_data=(
+                    df
+                    if gen_null
+                    else None
+                ),
+                null_audit_index=(
+                    test_index
+                    if gen_null
+                    else None
+                ),
+                null_refit_fn=(
+                    null_refit_fn
+                    if gen_null
+                    else None
+                ),
             )
         )
 

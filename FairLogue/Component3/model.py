@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Callable
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
@@ -400,23 +400,78 @@ class Model:
 
         return bootstrap_results
     
+
+    def refit_null_pipeline(
+        *,
+        train_df,
+        validation_df,
+        random_state,
+    ):
+        return fit_combined_fairmodel(
+            train_df=train_df,
+            validation_df=validation_df,
+
+            outcome_col=OUTCOME_COL,
+            features=FEATURES,
+            protected_cols=PROTECTED_COLUMNS,
+
+            model_name="Random Forest",
+            model_params=BEST_MODEL_PARAMS,
+
+            pre_technique="Outcome-Group Reweighting",
+            pre_params=REWEIGHT_PARAMS,
+
+            in_technique="Exponentiated Gradient Reduction",
+            in_params=EG_PARAMS,
+
+            post_technique="Reject-Option Threshold",
+            post_params=REJECT_OPTION_PARAMS,
+
+            random_state=random_state,
+        )
+    
+    def _jointly_permute_protected(
+        df,
+        protected_cols,
+        rng,
+    ):
+        out = df.copy()
+
+        permutation = rng.permutation(len(out))
+
+        protected_values = (
+            out[protected_cols]
+            .to_numpy(copy=True)
+        )
+
+        out.loc[:, protected_cols] = (
+            protected_values[permutation]
+        )
+
+        return out
+    
     def _null_distribution_from_fairmodel(
         self,
         *,
-        data: pd.DataFrame,
-        tau: float,
+        source_data: pd.DataFrame,
+        audit_index: List[Any],
         groups_universe: List[str],
         R_null: int,
+        null_refit_fn: Callable[
+            [pd.DataFrame, int],
+            object,
+        ],
     ) -> Dict[str, List[float]]:
         """
-        Generate a permutation null for a fixed, already-fitted FairModel.
+        Generate a refitted permutation null for a FairModel.
 
-        Protected-characteristic vectors are permuted jointly across audit
-        observations. This breaks their association with covariates and
-        outcomes while preserving the observed joint protected-group
-        distribution.
+        For every null replication:
 
-        The FairModel is not refitted.
+        1. Jointly permute protected-characteristic vectors.
+        2. Preserve the original train/validation/test row assignments.
+        3. Refit the complete FairSelect plan.
+        4. Regenerate counterfactual probabilities and hard predictions.
+        5. Recalculate the Component 3 disparity statistics.
         """
         if R_null < 1:
             raise ValueError(
@@ -424,62 +479,76 @@ class Model:
                 f"Received {R_null}."
             )
 
-        base_data = data.copy()
-
         protected_columns = list(
             self.fair_model.protected_cols
         )
 
-        missing_protected = [
-            column
-            for column in protected_columns
-            if column not in base_data.columns
+        missing_audit_indices = [
+            index
+            for index in audit_index
+            if index not in source_data.index
         ]
 
-        if missing_protected:
+        if missing_audit_indices:
             raise ValueError(
-                "Cannot generate the FairModel null distribution because "
-                "protected columns are missing: "
-                f"{missing_protected}"
+                "The Component 3 source data are missing audit "
+                f"indices: {missing_audit_indices[:20]}"
             )
-
-        protected_values = (
-            base_data[protected_columns]
-            .to_numpy(copy=True)
-        )
 
         rng = np.random.default_rng(
             self._random_state + 13
         )
 
-        null_rows = []
+        null_rows: List[
+            Dict[str, float]
+        ] = []
 
-        for permutation_number in range(R_null):
-            permuted_data = base_data.copy()
-
-            permutation = rng.permutation(
-                len(permuted_data)
+        for permutation_number in range(
+            int(R_null)
+        ):
+            permuted_source = (
+                _jointly_permute_protected(
+                    source_data,
+                    protected_columns,
+                    rng,
+                )
             )
 
-            # Permute the complete protected vector jointly.
-            permuted_data.loc[
-                :,
-                protected_columns,
-            ] = protected_values[
-                permutation
-            ]
+            null_random_state = (
+                self._random_state
+                + permutation_number
+            )
 
-            # Rebuild the factual intersectional group after permutation.
-            permuted_data[self.A] = (
-                self.fair_model
-                .make_group(permuted_data)
+            null_fair_model = null_refit_fn(
+                permuted_source,
+                null_random_state,
+            )
+
+            if null_fair_model is None:
+                raise RuntimeError(
+                    "The Component 3 null refitter returned None "
+                    f"for permutation {permutation_number}."
+                )
+
+            permuted_audit = (
+                permuted_source.loc[
+                    audit_index
+                ]
+                .copy()
+            )
+
+            permuted_audit[self.A] = (
+                null_fair_model
+                .make_group(permuted_audit)
                 .astype(str)
             )
 
             scored_permutation, _ = (
-                self._prepare_fairmodel_scored_data(
-                    permuted_data,
-                    groups_universe=groups_universe,
+                self.build_scores_from_fairmodel(
+                    fair_model=null_fair_model,
+                    data=permuted_audit,
+                    group_col=self.A,
+                    outcome_col=self.Y,
                 )
             )
 
@@ -487,7 +556,13 @@ class Model:
                 data_with_mu=scored_permutation,
                 group_col=self.A,
                 outcome_col=self.Y,
-                tau=tau,
+                tau=float(
+                    getattr(
+                        null_fair_model,
+                        "threshold",
+                        0.5,
+                    )
+                ),
                 method=self._method,
                 groups_universe=groups_universe,
             )
@@ -505,7 +580,7 @@ class Model:
             )
         )
 
-        table_null = {
+        return {
             key: [
                 row.get(
                     key,
@@ -515,8 +590,6 @@ class Model:
             ]
             for key in all_keys
         }
-
-        return table_null
 
 
     @staticmethod
@@ -655,7 +728,7 @@ class Model:
         self,
         alpha: float = 0.05,
         m_factor: float = 0.75,
-        delta_uval: float = 0.05
+        delta_uval: float = 0.10,
     ):
         """
         Assemble plot data, optional figures, and u-values.
@@ -763,9 +836,12 @@ class Model:
         cutoff=None,
         gen_null=True,
         R_null=200,
-        bootstrap="none",
+        bootstrap="rescaled",
         B=500,
         m_factor=0.75,
+        null_source_data=None,
+        null_audit_index=None,
+        null_refit_fn=None,
     ):
         """
         Audit an already-fitted FairModel using FairLogue Component 3.
@@ -788,6 +864,30 @@ class Model:
             raise ValueError(
                 "fair_model must be provided."
             )
+
+        if gen_null:
+            if null_source_data is None:
+                raise ValueError(
+                    "null_source_data is required when "
+                    "gen_null=True."
+                )
+
+            if null_audit_index is None:
+                raise ValueError(
+                    "null_audit_index is required when "
+                    "gen_null=True."
+                )
+
+            if null_refit_fn is None:
+                raise ValueError(
+                    "null_refit_fn is required when "
+                    "gen_null=True."
+                )
+
+            if not callable(null_refit_fn):
+                raise TypeError(
+                    "null_refit_fn must be callable."
+                )
 
         if self.A not in self.data.columns:
             raise RuntimeError(
@@ -885,16 +985,16 @@ class Model:
         if gen_null:
             results["table_null"] = (
                 self._null_distribution_from_fairmodel(
-                    data=audit_data,
-                    tau=tau,
+                    source_data=(
+                        null_source_data.copy()
+                    ),
+                    audit_index=list(
+                        null_audit_index
+                    ),
                     groups_universe=groups_universe,
                     R_null=int(R_null),
+                    null_refit_fn=null_refit_fn,
                 )
-            )
-
-            results["gen_null_applied"] = True
-            results["R_null_completed"] = int(
-                R_null
             )
 
         else:

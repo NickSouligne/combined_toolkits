@@ -18,7 +18,58 @@ from .params import PARAM_SPECS
 This file contains the core logic for building and training the models
 """
 
-#Define a class to hold the results
+
+@dataclass(frozen=True)
+class FairSelectPlanSpec:
+    """
+    Complete, serializable specification for refitting one FairSelect run.
+
+    plan_type
+        One of:
+            "baseline"
+            "single"
+            "combined"
+
+    technique
+        The selected FairSelect technique key for a single-technique run.
+        Must be None for baseline and combined runs.
+
+    selected
+        Complete selected-technique mapping for a combined run. Stored as
+        a tuple so the specification remains immutable.
+    """
+
+    plan_type: str
+
+    model_name: str
+    model_params: Dict[str, Any]
+
+    target: str
+    protected: Tuple[str, ...]
+    features: Tuple[str, ...]
+
+    include_protected_features: bool = False
+
+    technique: Optional[str] = None
+    selected: Tuple[Tuple[str, bool], ...] = field(
+        default_factory=tuple
+    )
+
+    train_index: Tuple[Any, ...] = field(
+        default_factory=tuple
+    )
+    validation_index: Tuple[Any, ...] = field(
+        default_factory=tuple
+    )
+    test_index: Tuple[Any, ...] = field(
+        default_factory=tuple
+    )
+
+    random_state: int = 42
+
+    def selected_dict(self) -> Dict[str, bool]:
+        return dict(self.selected)
+
 @dataclass
 class RunResult:
     name: str
@@ -33,6 +84,8 @@ class RunResult:
     A_test: object | None = None
     y_prob_test: object | None = None
     y_pred_test: object | None = None
+
+    refit_spec: FairSelectPlanSpec | None = None
 
 #---Core training runners---
 def build_estimator(model_name: str, params: Dict[str, Any]):

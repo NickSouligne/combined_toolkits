@@ -57,6 +57,13 @@ def run_combined_pipeline(model_name, params,
     ytr, yva, yte = y_tr.copy(), y_va.copy(), y_te.copy() #Labels
     Atr, Ava, Ate = A_tr.copy(), A_va.copy(), A_te.copy() #Group labels (intersectional)
 
+    technique_random_state = int(
+        params.get(
+            "random_state",
+            42,
+        )
+    )
+
     #---------- PRE ----------
     #We train on either: (a) preprocessed + SMOTE matrix, or (b) normal pipeline.
 
@@ -98,7 +105,9 @@ def run_combined_pipeline(model_name, params,
         if IMBLEARN_OK:
             try:
                 from imblearn.over_sampling import SMOTE
-                sampler = SMOTE()
+                sampler = SMOTE(
+                    random_state=technique_random_state,
+                )
                 #Fit SMOTE to training data, and generate balanced dataset by oversampling minority class
                 Xt_bal, yt_bal = sampler.fit_resample(Xt_tr, yt_tr)
                 #Get SMOTE flag and variables
@@ -161,7 +170,11 @@ def run_combined_pipeline(model_name, params,
             #Build base estimator without fairness constraints
             base = build_estimator(model_name, params)
             #Wrap the estimator in a ExponentiatedGradient with EO constraints (modifies the gradient of the steps during training to enforce EO)
-            eg = ExponentiatedGradient(estimator=base, constraints=EqualizedOdds())
+            eg = ExponentiatedGradient(
+                estimator=base,
+                constraints=EqualizedOdds(),
+                random_state=technique_random_state,
+            )
             #Fit the training data using group labels as senstive features
             eg.fit(Xfit, yfit, sensitive_features=Atr)
             trained_est = eg

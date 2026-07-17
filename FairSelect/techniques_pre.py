@@ -141,6 +141,12 @@ def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr
     This method aims to decorrelate labels y and group A in the weighted
     training distribution.
     """
+    technique_random_state = int(
+        params.get(
+            "random_state",
+            42,
+        )
+    )
     #Build and fit preprocessor on train+val
     prep = build_preprocessor(pd.concat([X_tr,X_va]), protected_cols)
     Xt = prep.fit_transform(X_tr)
@@ -149,7 +155,7 @@ def run_reweighting(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_tr
     #Compute reweighting factors
     w = compute_reweights(y_tr, A_tr)
     #Fit the base estimator using reweights as the sample weight
-    fit_with_optional_sample_weight(clf, Xt, y_tr, sample_weight=w)
+    fit_with_optional_sample_weight(clf, Xt, y_tr, sample_weight=w, random_state=technique_random_state)
     #Compute predicted probabilities on the test set
     p = to_proba(clf, prep.transform(X_te))
     yhat = (p >= 0.5).astype(int) #Hard predictions at 0.5 threshold
@@ -212,13 +218,20 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
     Xt = prep.fit_transform(X_tr)
     yt = y_tr.to_numpy()
     
+    technique_random_state = int(
+        params.get(
+            "random_state",
+            42,
+        )
+    )
+
     #Use IMBLEARN if available
     if IMBLEARN_OK:
         try:
             from imblearn.over_sampling import SMOTE, RandomOverSampler
-            sampler = SMOTE(random_state=42)
+            sampler = SMOTE(random_state=technique_random_state)
         except Exception:
-            sampler = RandomOverSampler(random_state=42)
+            sampler = RandomOverSampler(random_state=technique_random_state)
     else:
         #simple numpy oversample
         print("IMBLEARN not available, using simple oversampling fallback.")
@@ -230,8 +243,8 @@ def run_smote_or_ros(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, A_t
         else:
             nmax = max(len(pos), len(neg)) #Find target size for each class as maximum count
             #Oversample both positives and negatives to size nmax
-            pos_up = np.random.choice(pos, size=nmax, replace=True)
-            neg_up = np.random.choice(neg, size=nmax, replace=True)
+            pos_up = rng.choice(pos, size=nmax, replace=True)
+            neg_up = rng.choice(neg, size=nmax, replace=True)
             #Concatenate oversampled indices
             idx = np.concatenate([pos_up, neg_up])
             #Balanced feature and label matrix
@@ -311,6 +324,12 @@ def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, 
 
     The massaging happens only on labels in the training data, not on features.
     """
+    technique_random_state = int(
+        params.get(
+            "random_state",
+            42,
+        )
+    )
     #Build and fit preprocessor on train+val
     prep = build_preprocessor(pd.concat([X_tr,X_va]), protected_cols)
     Xt = prep.fit_transform(X_tr)
@@ -340,7 +359,8 @@ def run_local_massaging(model_name, params, X_tr, X_va, X_te, y_tr, y_va, y_te, 
             "technique": "Pre:Local Massaging",
             "model_name": model_name,
             "model_params": params,
-        },
+            "random_state": technique_random_state,
+            },
         )
 
     return evaluate_run(

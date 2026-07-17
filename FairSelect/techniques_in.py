@@ -79,6 +79,12 @@ def run_compositional_models(
     RunResult
         FairSelect evaluation result containing the fitted FairModel.
     """
+    technique_random_state = int(
+        params.get(
+            "random_state",
+            42,
+        )
+    )
 
     # These inputs are retained for a consistent runner API but are
     # not required by compositional fitting.

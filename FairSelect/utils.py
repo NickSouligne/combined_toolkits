@@ -255,37 +255,62 @@ def estimator_accepts_sample_weight(estimator) -> bool:
         return False
 
 
-def fit_with_optional_sample_weight(estimator, X, y, sample_weight=None):
+def fit_with_optional_sample_weight(
+    estimator,
+    X,
+    y,
+    sample_weight=None,
+    *,
+    random_state=42,
+):
     """
-    Fit an estimator, using sample_weight if possible; otherwise, approximate
-    weighting via bootstrap resampling.
+    Fit an estimator with optional sample weights.
 
-    Logic:
-      - If no sample_weight is provided, just call estimator.fit(X, y).
-      - If sample_weight is provided and the estimator supports it, pass it through.
-      - If sample_weight is provided but the estimator does NOT support it,
-        emulate the effect by drawing a weighted bootstrap sample of the data
-        and fitting on that resampled subset.
+    If the estimator does not support sample_weight, approximate weighting
+    through a reproducible weighted bootstrap.
     """
-    #Case 1: No sample weights, do a normal fit
-    if sample_weight is None: 
+    if sample_weight is None:
         return estimator.fit(X, y)
-    
-    #Case 2: Estimator supports sample weights, pass them through
-    if estimator_accepts_sample_weight(estimator):
-        return estimator.fit(X, y, sample_weight=sample_weight)
-    
-    #Case 3: Estimator does not support sample weights, do weighted bootstrap
-    #Convert weights to a non-negative array
-    w = np.asarray(sample_weight, dtype=float)
-    w = np.clip(w, 1e-12, None) #Avoid zero or negative weights
-    #Turn weights into a probability distribution over samples
-    p = w / w.sum()
-    n = len(y) #Number of samples
-    #Draw bootstrap sample indices according to weights
-    idx = np.random.choice(n, size=n, replace=True, p=p)
-    return estimator.fit(X[idx], np.asarray(y)[idx])
 
+    if estimator_accepts_sample_weight(estimator):
+        return estimator.fit(
+            X,
+            y,
+            sample_weight=sample_weight,
+        )
+
+    weights = np.asarray(
+        sample_weight,
+        dtype=float,
+    )
+
+    weights = np.clip(
+        weights,
+        1e-12,
+        None,
+    )
+
+    probabilities = (
+        weights / weights.sum()
+    )
+
+    n = len(y)
+
+    rng = np.random.default_rng(
+        int(random_state)
+    )
+
+    indices = rng.choice(
+        n,
+        size=n,
+        replace=True,
+        p=probabilities,
+    )
+
+    return estimator.fit(
+        X[indices],
+        np.asarray(y)[indices],
+    )
 
 def _fmt(x):
     """
@@ -689,52 +714,92 @@ def macro_gaps(group_stats: pd.DataFrame, cols=("PPR", "TPR", "FPR")):
     return out
 
 
-def group_balanced_bootstrap_indices(a_train: np.ndarray, size: int) -> np.ndarray:
+def group_balanced_bootstrap_indices(
+    a_train: np.ndarray,
+    size: int,
+    *,
+    random_state=42,
+) -> np.ndarray:
     """
-    Draw bootstrap indices with roughly equal representation from each group.
-
-    Logic:
-      - Let G be the set of unique groups in a_train.
-      - Compute per = max(1, size // len(G)), the number of samples to draw
-        per group initially.
-      - For each group g:
-          * Draw 'per' indices with replacement from that group's pool.
-      - Concatenate all per-group draws to get idx.
-      - If we still have fewer than 'size' indices (due to rounding),
-        draw additional indices from the entire training set (uniformly).
-
-    Parameters
-    ----------
-    a_train : np.ndarray
-        Array of group labels for each training sample.
-    size : int
-        Desired total number of bootstrap samples.
-
-    Returns
-    -------
-    np.ndarray
-        Array of indices of length 'size', suitable for indexing X and y.
+    Draw a reproducible group-balanced bootstrap sample.
     """
-    #Get unique group labels
-    groups = pd.Series(a_train).unique()
-    per = max(1, size // len(groups)) #Samples per group
-    idxs = []
+    a_train = np.asarray(
+        a_train
+    )
 
-    #For each group, draw 'per' samples with replacement
-    for g in groups:
-        pool = np.where(a_train == g)[0] #Indices of this group
-        if len(pool) == 0: #skip empty groups
+    if len(a_train) == 0:
+        raise ValueError(
+            "a_train cannot be empty."
+        )
+
+    if size < 1:
+        raise ValueError(
+            f"size must be at least 1. Received {size}."
+        )
+
+    rng = np.random.default_rng(
+        int(random_state)
+    )
+
+    groups = pd.Series(
+        a_train
+    ).unique()
+
+    per_group = max(
+        1,
+        size // len(groups),
+    )
+
+    sampled_indices = []
+
+    for group in groups:
+        group_pool = np.flatnonzero(
+            a_train == group
+        )
+
+        if len(group_pool) == 0:
             continue
-        #Randomly sample
-        take = np.random.choice(pool, size=per, replace=True)
-        idxs.append(take)
-    #Concatenate per-group samples
-    idx = np.concatenate(idxs)
-    #If fewer indices than expected, draw extra samples 
-    if len(idx) < size:
-        extra = np.random.choice(len(a_train), size=size - len(idx), replace=True)
-        idx = np.concatenate([idx, extra])
-    return idx
+
+        group_sample = rng.choice(
+            group_pool,
+            size=per_group,
+            replace=True,
+        )
+
+        sampled_indices.append(
+            group_sample
+        )
+
+    if not sampled_indices:
+        raise RuntimeError(
+            "No group-balanced bootstrap indices were generated."
+        )
+
+    indices = np.concatenate(
+        sampled_indices
+    )
+
+    if len(indices) < size:
+        additional_indices = rng.choice(
+            len(a_train),
+            size=size - len(indices),
+            replace=True,
+        )
+
+        indices = np.concatenate(
+            [
+                indices,
+                additional_indices,
+            ]
+        )
+
+    if len(indices) > size:
+        indices = indices[:size]
+
+    return np.asarray(
+        indices,
+        dtype=int,
+    )
 
 
 def input_repair_standardize_by_group(X_train_df: pd.DataFrame, X_test_df: pd.DataFrame, a_train: pd.Series, a_test: pd.Series) -> pd.DataFrame:

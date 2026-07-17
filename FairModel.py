@@ -56,7 +56,7 @@ class FairModel:
         component3_cutoff=None,
         component3_gen_null=True,
         component3_R_null=200,
-        component3_bootstrap="none",
+        component3_bootstrap="rescaled",
         component3_B=500,
         component3_m_factor=0.75,
 
@@ -68,6 +68,7 @@ class FairModel:
         fairlogue_component3_results=None,
         fairlogue_component3_summary=None,
         fairlogue_component3_plots=None,
+        refit_spec=None,
 
         metadata=None,
     ):
@@ -114,7 +115,7 @@ class FairModel:
         self.fairlogue_component3_results = fairlogue_component3_results
         self.fairlogue_component3_summary = fairlogue_component3_summary
         self.fairlogue_component3_plots = fairlogue_component3_plots
-
+        self.refit_spec = refit_spec
         self.metadata = metadata or {}
 
     # Creates the intersectional group based off the protected columns
