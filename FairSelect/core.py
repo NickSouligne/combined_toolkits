@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Tuple, Union, Sequence, Field
+from typing import Dict, Any, List, Optional, Tuple, Union, Sequence
 import numpy as np
 import pandas as pd
 from .deps import (
