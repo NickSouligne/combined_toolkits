@@ -11,6 +11,7 @@ from FairLogue.Component1.intersectional_metrics import (
 )
 import pandas as pd
 from FairModel import FairModel
+from FairLogue.Component3.plots import compute_uvalues
 
 from .core import RunResult, split_data, FairSelectPlanSpec
 
@@ -1492,35 +1493,23 @@ def _run_fairlogue_component3_for_result(
                 random_state=null_random_state,
             )
 
-        component3_results = (
-            component3_model.fit_fairness_from_fairmodel(
-                cutoff=getattr(
-                    fair_model,
-                    "threshold",
-                    0.5,
-                ),
-                gen_null=bool(gen_null),
-                R_null=int(R_null),
-                bootstrap=bootstrap,
-                B=int(B),
-                m_factor=float(m_factor),
-                null_source_data=(
-                    df
-                    if gen_null
-                    else None
-                ),
-                null_audit_index=(
-                    test_index
-                    if gen_null
-                    else None
-                ),
-                null_refit_fn=(
-                    null_refit_fn
-                    if gen_null
-                    else None
-                ),
-            )
+        component3_results = component3_model.fit_fairness_from_fairmodel(
+            cutoff=getattr(fair_model, "threshold", 0.5),
+            gen_null=bool(gen_null),
+            R_null=int(R_null),
+            bootstrap=bootstrap,
+            B=int(B),
+            m_factor=float(m_factor),
         )
+
+        table_null_delta = None
+        table_uval = None
+
+        if component3_results.get("table_null") is not None:
+            table_null_delta, table_uval = compute_uvalues(
+                results=component3_results,
+                delta_uval=0.10,
+            )
 
         summary = component3_model.summarize()
 

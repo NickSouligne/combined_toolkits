@@ -944,6 +944,11 @@ class Model:
             groups_universe=groups_universe,
         )
 
+        table_null_delta, table_uval = compute_uvalues(
+            component3_results,
+            delta_uval=0.05,
+        )
+
         results = {
             "defs": defs,
             "est_choice": data_with_scores.copy(),
