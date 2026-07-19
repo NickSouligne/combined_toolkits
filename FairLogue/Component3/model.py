@@ -9,7 +9,6 @@ from .plots import get_plots
 from sklearn.base import clone
 from .estimation_functions import get_defs_analysis
 
-
 def ensure_probabilistic_estimator(estimator, *, method: str = "isotonic", cv: int = 3):
     """
     Return an estimator with `predict_proba`.
@@ -942,11 +941,6 @@ class Model:
             tau=tau,
             method=self._method,
             groups_universe=groups_universe,
-        )
-
-        table_null_delta, table_uval = compute_uvalues(
-            component3_results,
-            delta_uval=0.05,
         )
 
         results = {
