@@ -452,3 +452,7 @@ def get_plots(results: Dict[str, object], sampsize: Optional[int] = None, alpha:
         pass
 
     return est_summaries, table_null_delta, table_uval, group_null_long
+<<<<<<< HEAD
+=======
+
+>>>>>>> 4da435e6ad62b9c46c2c1c20118756cf6a6edf1d
